@@ -1002,6 +1002,72 @@
     gap: 8px;
   }
 
+  /* Save-preset button next to the style dropdown */
+  .style-control { display: flex; align-items: stretch; gap: 3px; }
+  .style-dropdown { flex: 1; min-width: 0; }
+  .preset-save-btn {
+    flex: 0 0 auto;
+    width: 28px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: 4px;
+    color: var(--text-dim); cursor: pointer;
+    transition: background 100ms, color 100ms;
+  }
+  .preset-save-btn:hover { background: var(--hover); color: var(--text); }
+  .preset-save-btn svg { width: 15px; height: 15px; display: block; }
+
+  /* User-preset rows in the style dropdown — name + delete (×) */
+  .dropdown-item.user-preset { padding-right: 4px; }
+  .preset-del {
+    margin-left: auto;
+    flex: 0 0 auto;
+    width: 18px; height: 18px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: 3px;
+    color: var(--text-mute); font-size: 14px; line-height: 1; cursor: pointer;
+    opacity: 0; transition: opacity 80ms, background 80ms, color 80ms;
+  }
+  .dropdown-item.user-preset:hover .preset-del { opacity: 1; }
+  .preset-del:hover { background: rgba(0,0,0,0.35); color: #fff; }
+
+  /* Save-preset modal */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: none; align-items: center; justify-content: center;
+    z-index: 3000;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    width: 280px;
+    background: var(--pop);
+    border-radius: 10px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.4);
+    padding: 16px;
+    user-select: none;
+  }
+  .modal-title { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+  .modal-input {
+    width: 100%;
+    background: var(--workspace);
+    border: none; border-radius: 6px;
+    color: var(--text); font: inherit; font-size: 12px;
+    padding: 8px 10px; outline: none;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+    margin-bottom: 14px;
+    box-sizing: border-box;
+  }
+  .modal-input:focus { box-shadow: inset 0 0 0 1px var(--accent); }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal-btn {
+    border: none; border-radius: 6px; font: inherit; font-size: 11px;
+    padding: 7px 14px; cursor: pointer;
+  }
+  .modal-btn.secondary { background: var(--workspace); color: var(--text-dim); }
+  .modal-btn.secondary:hover { color: var(--text); }
+  .modal-btn.primary { background: var(--accent); color: #fff; }
+  .modal-btn.primary:hover { filter: brightness(1.08); }
+
   /* Tertiary button — used for minimize under Insert */
   .btn-tertiary {
     background: transparent;
@@ -1308,6 +1374,9 @@
         </button>
       </div>
     </div>
+    <button class="preset-save-btn" id="savePresetBtn" type="button" title="Save current style as a preset">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h7.5L13.5 5.5V13a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5z"/><path d="M5 2.5v3h5v-3M5 13.5v-4h6v4"/></svg>
+    </button>
   </div>
 </div>
 
@@ -1422,6 +1491,18 @@
     </div>
 
     <div class="pk-field alpha"><input type="number" id="pkA" min="0" max="100"><span class="pk-suffix">%</span></div>
+  </div>
+</div>
+
+<!-- Save-preset modal -->
+<div class="modal-overlay" id="presetModal">
+  <div class="modal">
+    <div class="modal-title">Save preset</div>
+    <input type="text" class="modal-input" id="presetNameInput" placeholder="Preset name" maxlength="40" autocomplete="off">
+    <div class="modal-actions">
+      <button class="modal-btn secondary" id="presetCancelBtn" type="button">Cancel</button>
+      <button class="modal-btn primary" id="presetSaveConfirmBtn" type="button">Save</button>
+    </div>
   </div>
 </div>
 
@@ -3116,34 +3197,65 @@
     silver: { name: 'Silver', gradient: ['#59636A', '#A5ADB2'], box: { color: '#ffffff', alpha: 40 } },
     white:  { name: 'White',  gradient: ['#A4AFB6', '#F3F5F7'], box: { color: '#ffffff', alpha: 40 } },
   };
+  // Capture / restore the visual "style" (no geometry, no painted cells).
+  function snapshotStyle() {
+    return {
+      artboardPaint: JSON.parse(JSON.stringify(state.artboardPaint)),
+      boxPaint: JSON.parse(JSON.stringify(state.boxPaint)),
+      gridColor: state.gridColor, gridAlpha: state.gridAlpha, gridStroke: state.gridStroke,
+      boxR: state.boxR, neckR: state.neckR, shape: state.shape,
+    };
+  }
+  function applyStyleSnap(s) {
+    state.artboardPaint = JSON.parse(JSON.stringify(s.artboardPaint));
+    state.boxPaint = JSON.parse(JSON.stringify(s.boxPaint));
+    if (s.gridColor != null) state.gridColor = s.gridColor;
+    if (s.gridAlpha != null) state.gridAlpha = s.gridAlpha;
+    if (s.gridStroke != null) state.gridStroke = s.gridStroke;
+    if (s.boxR != null) state.boxR = s.boxR;
+    if (s.neckR != null) state.neckR = s.neckR;
+    if (s.shape) state.shape = s.shape;
+    syncPaintToLegacy('artboard');
+    syncPaintToLegacy('box');
+  }
   function applyStyle(name) {
-    const s = STYLES[name];
-    if (!s) return;
+    const builtin = STYLES[name];
+    const user = userPresets.find(p => p.id === name);
+    if (!builtin && !user) return;
     pushHistory('style');
     state.style = name;
-    if (s.gradient) {
-      // Preset → artboard linear gradient (135°) + box white-40% solid
+    if (user) {
+      applyStyleSnap(user.snap);
+    } else if (builtin.gradient) {
+      // Built-in preset → artboard linear gradient (135°) + box white-40% solid
       state.artboardPaint = { type: 'linear', angle: 135, stops: [
-        { color: s.gradient[0], alpha: 100, pos: 0 },
-        { color: s.gradient[1], alpha: 100, pos: 1 },
+        { color: builtin.gradient[0], alpha: 100, pos: 0 },
+        { color: builtin.gradient[1], alpha: 100, pos: 1 },
       ]};
-      if (s.box) state.boxPaint = { type: 'solid', angle: 135, stops: [
-        { color: s.box.color, alpha: s.box.alpha, pos: 0 },
-        { color: s.box.color, alpha: 0, pos: 1 },
+      if (builtin.box) state.boxPaint = { type: 'solid', angle: 135, stops: [
+        { color: builtin.box.color, alpha: builtin.box.alpha, pos: 0 },
+        { color: builtin.box.color, alpha: 0, pos: 1 },
       ]};
     }
     applyAll();
   }
   function updateStyleLabel() {
-    const s = STYLES[state.style] || STYLES.custom;
-    $('styleLabel').textContent = s.name;
     const sw = $('styleSwatchActive');
-    if (s.gradient) {
-      sw.style.background = `linear-gradient(135deg, ${s.gradient[0]}, ${s.gradient[1]})`;
+    const user = userPresets.find(p => p.id === state.style);
+    if (user) {
+      $('styleLabel').textContent = user.name;
+      sw.style.background = paintToCSS(user.snap.artboardPaint);
       sw.classList.remove('custom');
     } else {
-      sw.removeAttribute('style');
-      sw.classList.add('custom');
+      const s = STYLES[state.style] || STYLES.custom;
+      $('styleLabel').textContent = s.name;
+      if (s.gradient) {
+        sw.style.background = `linear-gradient(135deg, ${s.gradient[0]}, ${s.gradient[1]})`;
+        sw.classList.remove('custom');
+      } else {
+        sw.removeAttribute('style');
+        sw.classList.add('custom');
+      }
     }
     document.querySelectorAll('#styleDropdown .dropdown-item').forEach(item => {
       item.classList.toggle('selected', item.dataset.style === state.style);
@@ -3162,12 +3274,87 @@
   document.addEventListener('mousedown', e => {
     if (!styleDd.contains(e.target)) styleDd.classList.remove('open');
   });
-  document.querySelectorAll('#styleDropdown .dropdown-item').forEach(item => {
-    item.addEventListener('click', () => {
-      applyStyle(item.dataset.style);
-      styleDd.classList.remove('open');
-    });
+  // Delegated click: built-in + user presets share one handler; the (×) on a
+  // user preset deletes it instead of selecting.
+  styleDd.querySelector('.dropdown-menu').addEventListener('click', e => {
+    const del = e.target.closest('.preset-del');
+    if (del) { e.stopPropagation(); deleteUserPreset(del.dataset.id); return; }
+    const item = e.target.closest('.dropdown-item');
+    if (!item) return;
+    applyStyle(item.dataset.style);
+    styleDd.classList.remove('open');
   });
+
+  /* ---- User-defined style presets (localStorage) ---- */
+  const PRESETS_KEY = 'gridBlobPresets';
+  let userPresets = [];
+  function loadUserPresets() {
+    try { userPresets = JSON.parse(localStorage.getItem(PRESETS_KEY)) || []; }
+    catch (e) { userPresets = []; }
+  }
+  function persistUserPresets() {
+    try { localStorage.setItem(PRESETS_KEY, JSON.stringify(userPresets)); } catch (e) {}
+  }
+  function renderUserPresets() {
+    const menu = styleDd.querySelector('.dropdown-menu');
+    menu.querySelectorAll('.dropdown-item.user-preset').forEach(n => n.remove());
+    userPresets.forEach(p => {
+      const btn = document.createElement('button');
+      btn.className = 'dropdown-item user-preset';
+      btn.type = 'button';
+      btn.dataset.style = p.id;
+      btn.innerHTML = '<span class="dropdown-check">✓</span>'
+        + '<span class="style-item"><span class="style-swatch"></span><span class="preset-name"></span></span>'
+        + '<span class="preset-del" title="Delete preset">×</span>';
+      btn.querySelector('.style-swatch').style.background = paintToCSS(p.snap.artboardPaint);
+      btn.querySelector('.preset-name').textContent = p.name;
+      btn.querySelector('.preset-del').dataset.id = p.id;
+      menu.appendChild(btn);
+    });
+    updateStyleLabel();
+  }
+  function deleteUserPreset(id) {
+    const i = userPresets.findIndex(p => p.id === id);
+    if (i === -1) return;
+    userPresets.splice(i, 1);
+    persistUserPresets();
+    if (state.style === id) state.style = 'custom';
+    renderUserPresets();
+    applyAll();
+    toast('Preset deleted');
+  }
+
+  // Save-preset modal
+  const presetModal = $('presetModal'), presetNameInput = $('presetNameInput');
+  function openPresetModal() {
+    presetNameInput.value = '';
+    presetModal.classList.add('open');
+    setTimeout(() => presetNameInput.focus(), 30);
+  }
+  function closePresetModal() { presetModal.classList.remove('open'); }
+  function confirmSavePreset() {
+    const name = presetNameInput.value.trim();
+    if (!name) { presetNameInput.focus(); return; }
+    const id = 'user-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    userPresets.push({ id, name, snap: snapshotStyle() });
+    persistUserPresets();
+    renderUserPresets();
+    closePresetModal();
+    state.style = id;       // select the freshly saved preset
+    applyAll();
+    toast('Preset saved');
+  }
+  $('savePresetBtn').addEventListener('click', openPresetModal);
+  $('presetCancelBtn').addEventListener('click', closePresetModal);
+  $('presetSaveConfirmBtn').addEventListener('click', confirmSavePreset);
+  presetModal.addEventListener('mousedown', e => { if (e.target === presetModal) closePresetModal(); });
+  presetNameInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); confirmSavePreset(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closePresetModal(); }
+  });
+
+  loadUserPresets();
+  renderUserPresets();
 
   /* Templates — left control mirroring zoom on right */
   const TEMPLATES = {
