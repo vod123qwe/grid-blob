@@ -1,0 +1,3237 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Grid Blob</title>
+<style>
+  :root {
+    --workspace: #1e1e1e;
+    --artboard: #2a2a2a;
+    --sidebar: #2c2c2c;
+    --pop: #2c2c2c;
+    --divider: #1a1a1c;
+    --hover: #383838;
+    --accent: #0d99ff;
+    --text: #e6e6e6;
+    --text-dim: #888;
+    --text-mute: #6a6a6a;
+
+    --blob-color: #ffd400;
+    --blob-radius: 0;
+    --grid-line: rgba(255,255,255,0.10);
+    --grid-stroke: 0.5px;
+    --artboard-color: #2a2a2a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; height: 100dvh; }
+  body {
+    margin: 0;
+    background: var(--workspace);
+    color: var(--text);
+    font: 11px/1.4 "Inter", -apple-system, "Segoe UI", system-ui, sans-serif;
+    overflow: hidden;
+    user-select: none;
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    height: 100vh;
+    height: 100dvh;
+    width: 100vw;
+  }
+
+  /* Workspace + artboard */
+  .canvas-area {
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: safe center;
+    justify-content: safe center;
+    min-width: 0;
+    min-height: 0;
+    background:
+      radial-gradient(circle, rgba(255,255,255,0.025) 1px, transparent 1px) 0 0 / 20px 20px,
+      var(--workspace);
+  }
+  .artboard-wrap {
+    position: relative;
+    flex-shrink: 0;
+    transform: translate(var(--pan-x, 0), var(--pan-y, 0));
+    zoom: var(--zoom, 1);
+    transition: transform 100ms ease-out;
+  }
+  .canvas-area.h-mode,
+  .canvas-area.h-mode .cell,
+  .canvas-area.h-mode .resize-handle { cursor: grab !important; }
+  .canvas-area.panning,
+  .canvas-area.panning .cell,
+  .canvas-area.panning .resize-handle { cursor: grabbing !important; }
+  .canvas-area.panning .artboard-wrap,
+  .canvas-area.h-mode .artboard-wrap { transition: none; }
+  .artboard {
+    background: var(--artboard-color);
+    position: relative;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.3), 0 6px 24px rgba(0,0,0,0.4);
+  }
+  .stage { position: relative; }
+  .grid-layer { position: absolute; inset: 0; display: grid; z-index: 2; }
+  .cell {
+    border-right: var(--grid-stroke) solid var(--grid-line);
+    border-bottom: var(--grid-stroke) solid var(--grid-line);
+    cursor: crosshair;
+  }
+  .cell.first-col { border-left: var(--grid-stroke) solid var(--grid-line); }
+  .cell.first-row { border-top: var(--grid-stroke) solid var(--grid-line); }
+  .blobs {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    filter: url(#goo);
+    pointer-events: none;
+  }
+  .blob {
+    position: absolute;
+    background: var(--blob-color);
+    clip-path: var(--blob-clip, none);
+    border-radius: var(--blob-radius, 0);
+  }
+  /* Gradient box layer — goo silhouette as mask over a gradient-filled rect.
+     Shown only when box paint is a gradient; otherwise the .blobs div (solid) is used. */
+  .blobs-grad {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    display: none;
+  }
+  body[data-box-grad="1"] .blobs { display: none; }
+  body[data-box-grad="1"] .blobs-grad { display: block; }
+  .brush-preview {
+    position: absolute;
+    pointer-events: none;
+    z-index: 3;
+    background: rgba(13, 153, 255, 0.15);
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+    display: none;
+    border-radius: 2px;
+  }
+  .brush-preview.show { display: block; }
+
+  .brush-control {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--sidebar);
+    border-radius: 6px;
+    padding: 6px 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
+    z-index: 50;
+    user-select: none;
+  }
+  .brush-icon {
+    width: 14px; height: 14px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .brush-icon svg { width: 14px; height: 14px; display: block; }
+  .brush-control input[type=range] {
+    width: 120px;
+    height: 18px;
+  }
+  .brush-value {
+    color: var(--text);
+    min-width: 24px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+  }
+
+  .resize-handle {
+    position: absolute;
+    right: -4px; bottom: -4px;
+    width: 10px; height: 10px;
+    background: var(--accent);
+    border: 2px solid var(--workspace);
+    cursor: nwse-resize;
+    z-index: 5;
+    border-radius: 1px;
+  }
+  .artboard-label {
+    position: absolute;
+    top: -20px; left: 0;
+    font-size: 10px;
+    color: var(--text-mute);
+    pointer-events: none;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    background: var(--sidebar);
+    border-left: 1px solid var(--divider);
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+  }
+  .sidebar::-webkit-scrollbar { width: 10px; }
+  .sidebar::-webkit-scrollbar-track { background: transparent; }
+  .sidebar::-webkit-scrollbar-thumb {
+    background: #3a3a3a;
+    border-radius: 5px;
+    border: 2px solid var(--sidebar);
+  }
+
+  .section {
+    border-bottom: 2px solid var(--divider);
+  }
+  .section:last-child { border-bottom: 0; }
+  .section-head {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font: 600 11px/1 inherit;
+    letter-spacing: 0.04em;
+    padding: 16px 16px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+    text-transform: none;
+  }
+  .section-head:hover { color: var(--text); }
+  .section-head .caret {
+    transition: transform 150ms;
+    font-size: 9px;
+    color: var(--text-mute);
+    width: 8px;
+    display: inline-block;
+  }
+  .section.collapsed .section-head .caret { transform: rotate(-90deg); }
+  .section-body { padding: 2px 16px 16px; }
+  .section.collapsed .section-body { display: none; }
+  .section.no-head > .section-body { padding-top: 14px; }
+  .row { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+  .row.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+  /* Field — scrubbable */
+  .field {
+    display: flex;
+    align-items: center;
+    background: transparent;
+    border-radius: 4px;
+    padding: 0 6px;
+    transition: background 100ms;
+    min-width: 0;
+    cursor: ew-resize;
+  }
+  .field:hover { background: var(--hover); }
+  .field:focus-within {
+    background: var(--workspace);
+    box-shadow: inset 0 0 0 1px var(--accent);
+    cursor: text;
+  }
+  .field .ico {
+    color: var(--text-mute);
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .field .ico svg { width: 12px; height: 12px; display: block; }
+  .field input {
+    flex: 1; min-width: 0;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    padding: 5px 0;
+    outline: none;
+    width: 100%;
+    cursor: inherit;
+  }
+  .field input[type="number"] { -moz-appearance: textfield; text-align: right; }
+  .field input::-webkit-outer-spin-button,
+  .field input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+  /* Color field row — swatch + editable hex + editable alpha */
+  .color-row {
+    display: grid;
+    grid-template-columns: 24px 1fr 60px;
+    gap: 6px;
+    align-items: center;
+  }
+  .swatch {
+    width: 24px; height: 24px;
+    border-radius: 4px;
+    position: relative;
+    cursor: pointer;
+    background-image:
+      linear-gradient(45deg, #555 25%, transparent 25%),
+      linear-gradient(-45deg, #555 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #555 75%),
+      linear-gradient(-45deg, transparent 75%, #555 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+    padding: 0;
+    border: none;
+  }
+  .swatch::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: var(--sw-color, transparent);
+    border-radius: 4px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
+  }
+  .color-hex-input {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    padding: 5px 6px;
+    outline: none;
+    text-transform: uppercase;
+    border-radius: 4px;
+    width: 100%;
+    cursor: text;
+    transition: background 100ms;
+  }
+  .color-hex-input:hover { background: var(--hover); }
+  .color-hex-input:focus {
+    background: var(--workspace);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+
+  /* Slider */
+  .slider-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 32px;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+  }
+  .slider-row > .lbl { color: var(--text-dim); }
+  .slider-row > .val { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  input[type=range] {
+    -webkit-appearance: none;
+    background: transparent;
+    width: 100%;
+    height: 18px;
+  }
+  input[type=range]::-webkit-slider-runnable-track {
+    height: 2px;
+    background: #444;
+    border-radius: 1px;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px; height: 12px;
+    background: var(--text);
+    border-radius: 50%;
+    margin-top: -5px;
+    cursor: grab;
+  }
+  input[type=range]:active::-webkit-slider-thumb { cursor: grabbing; }
+
+  /* Segmented */
+  .seg {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    background: var(--workspace);
+    border-radius: 4px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .seg button {
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    padding: 5px 0;
+    font: inherit;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 100ms;
+  }
+  .seg button:hover { color: var(--text); }
+  .seg button.on { background: var(--hover); color: var(--text); }
+
+  .info { color: var(--text-mute); font-size: 10px; margin-top: 4px; }
+
+  /* Subgroup divider inside a section — inset from edges via section padding */
+  .subdiv {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+    margin: 14px 0;
+  }
+
+  /* Stepped slider */
+  .stepper-row {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 10px;
+    align-items: center;
+    margin-top: 6px;
+  }
+  .stepper-row > .lbl {
+    color: var(--text-mute);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .stepper {
+    position: relative;
+    height: 28px;
+    display: grid;
+    align-items: stretch;
+    cursor: pointer;
+    user-select: none;
+  }
+  .stepper-track {
+    position: absolute;
+    left: var(--stepper-side, 16.67%);
+    right: var(--stepper-side, 16.67%);
+    top: 5px;
+    height: 2px;
+    background: #3a3a3c;
+    border-radius: 1px;
+    pointer-events: none;
+  }
+  .stepper-fill {
+    position: absolute;
+    left: var(--stepper-side, 16.67%);
+    width: var(--stepper-fill, 0%);
+    top: 5px;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 1px;
+    pointer-events: none;
+    transition: width 100ms;
+  }
+  .stepper-stop {
+    position: relative;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0;
+    color: var(--text-mute);
+    font: inherit;
+    font-size: 10px;
+    pointer-events: none;
+  }
+  /* Dot sits ON the track line (line centre at 6px → 10px dot top at 1px) */
+  .stepper-stop .dot {
+    position: absolute;
+    top: 1px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--sidebar);
+    box-shadow: inset 0 0 0 2px #555;
+    transition: all 120ms;
+  }
+  .stepper-stop:hover .dot { box-shadow: inset 0 0 0 2px #777; }
+  .stepper-stop.active .dot {
+    background: var(--accent);
+    box-shadow: 0 0 0 1.5px var(--sidebar);
+  }
+  .stepper-stop.active { color: var(--text); }
+
+  /* Export panel */
+  .export-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .field.select-field {
+    cursor: pointer;
+    padding-right: 4px;
+  }
+  .field select {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    outline: none;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 5px 0;
+  }
+  .field select option { background: var(--sidebar); color: var(--text); }
+  .field .caret {
+    color: var(--text-mute);
+    font-size: 10px;
+    pointer-events: none;
+  }
+  .btn {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 8px 12px;
+    font: inherit;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 100ms;
+    width: 100%;
+  }
+  .btn:hover { background: #2aa7ff; }
+
+  /* Custom dropdown */
+  .dropdown {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+  }
+  .dropdown-btn {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+    padding: 5px 6px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+    transition: background 100ms;
+  }
+  .dropdown-btn:hover { background: var(--hover); }
+  .dropdown.open .dropdown-btn {
+    background: var(--workspace);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .dropdown-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .dropdown-caret {
+    font-size: 9px;
+    color: var(--text-mute);
+    flex-shrink: 0;
+    transition: transform 160ms ease;
+  }
+  .dropdown.open .dropdown-caret { transform: rotate(180deg); }
+  .dropdown-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 100%;
+    background: #2c2c2c;
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.08);
+    z-index: 1100;
+    transform-origin: top center;
+    transform: scaleY(0.6) translateY(-8px);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+                opacity 120ms ease-out;
+    white-space: nowrap;
+  }
+  .dropdown.open .dropdown-menu {
+    transform: scaleY(1) translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px 6px 4px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    width: 100%;
+    cursor: pointer;
+    border-radius: 4px;
+    white-space: nowrap;
+    transition: background 80ms;
+  }
+  .dropdown-item:hover { background: var(--accent); }
+  .dropdown-check {
+    width: 14px;
+    flex-shrink: 0;
+    text-align: center;
+    color: var(--text);
+    font-size: 9px;
+    visibility: hidden;
+  }
+  .dropdown-item.selected .dropdown-check { visibility: visible; }
+
+  /* Hide native selects + adjacent static carets that have been enhanced */
+  select[data-enhanced] { display: none; }
+  .field.select-field {
+    padding: 0;
+    background: transparent !important;
+    cursor: default;
+    box-shadow: none !important;
+  }
+  .field.select-field > .caret { display: none; }
+  .pk-format-dropdown::after { display: none; }
+
+  /* Color picker popover */
+  .picker {
+    position: fixed;
+    width: 232px;
+    background: var(--pop);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,0,0,0.4);
+    z-index: 1000;
+    display: none;
+    padding: 12px;
+    user-select: none;
+  }
+  .picker.open { display: block; }
+  .picker-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--text-dim);
+    cursor: move;
+  }
+  .picker-close {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .picker-close:hover { color: var(--text); }
+
+  /* Fill-type row */
+  .pk-types {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    background: var(--workspace);
+    border-radius: 6px;
+    padding: 3px;
+    margin-bottom: 10px;
+  }
+  .pk-type-btn {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 5px 0;
+    cursor: pointer;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 100ms, color 100ms;
+  }
+  .pk-type-btn svg { width: 16px; height: 16px; display: block; }
+  .pk-type-btn:hover { color: var(--text); }
+  .pk-type-btn.active { background: var(--hover); color: var(--text); }
+
+  /* Gradient controls */
+  .pk-grad { display: none; margin-bottom: 10px; }
+  .picker.is-gradient .pk-grad { display: block; }
+  .pk-grad-bar {
+    position: relative;
+    height: 22px;
+    border-radius: 4px;
+    cursor: copy;
+    margin-bottom: 10px;
+    background-image:
+      linear-gradient(45deg, #555 25%, transparent 25%),
+      linear-gradient(-45deg, #555 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #555 75%),
+      linear-gradient(-45deg, transparent 75%, #555 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
+  }
+  .pk-grad-fill { position: absolute; inset: 0; border-radius: 4px; pointer-events: none; }
+  .pk-grad-stop {
+    position: absolute;
+    top: -3px;
+    width: 14px; height: 28px;
+    transform: translateX(-50%);
+    border-radius: 3px;
+    background: var(--stop-color, #fff);
+    box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0,0,0,0.5);
+    cursor: grab;
+  }
+  .pk-grad-stop.active { box-shadow: 0 0 0 2px var(--accent), 0 0 0 3px rgba(0,0,0,0.5); z-index: 2; }
+  /* Direction / position dial + numeric angle */
+  .pk-grad-ctl { display: flex; align-items: center; gap: 12px; }
+  .pk-dial {
+    position: relative;
+    width: 48px; height: 48px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: var(--workspace);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
+    cursor: grab;
+  }
+  .pk-dial:active { cursor: grabbing; }
+  .pk-dial-bg { position: absolute; inset: 2px; border-radius: 50%; pointer-events: none; }
+  .pk-dial::after { /* centre pip */
+    content: ''; position: absolute; left: 50%; top: 50%;
+    width: 3px; height: 3px; border-radius: 50%;
+    background: rgba(255,255,255,0.6);
+    transform: translate(-50%, -50%);
+    pointer-events: none; z-index: 3;
+  }
+  .pk-dial-rot { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+  .pk-dial-arm {
+    position: absolute; left: 50%; top: 6px; bottom: 50%;
+    width: 2px; background: #fff;
+    transform: translateX(-50%);
+    box-shadow: 0 0 2px rgba(0,0,0,0.6);
+  }
+  .pk-dial-handle {
+    position: absolute; left: 50%; top: 6px;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #fff;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 1.5px rgba(0,0,0,0.55);
+  }
+  .pk-dial-pt { /* radial centre point */
+    position: absolute; left: 50%; top: 50%;
+    width: 11px; height: 11px; border-radius: 50%;
+    background: #fff;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 1.5px rgba(0,0,0,0.55);
+    pointer-events: none; z-index: 2;
+    display: none;
+  }
+  .picker.ftype-radial .pk-dial-rot { display: none; }
+  .picker.ftype-radial .pk-dial-pt { display: block; }
+
+  .pk-angle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .pk-angle-lbl { flex: 1; }
+  .pk-angle input {
+    width: 48px;
+    background: var(--workspace);
+    border: none;
+    border-radius: 4px;
+    color: var(--text);
+    font: inherit;
+    text-align: right;
+    padding: 4px 6px;
+    outline: none;
+    -moz-appearance: textfield;
+  }
+  .pk-angle input::-webkit-outer-spin-button,
+  .pk-angle input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .pk-angle-deg { color: var(--text-mute); }
+  .picker.ftype-radial .pk-angle { display: none; }
+  .pk-rev {
+    flex: 0 0 auto;
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--workspace);
+    border: none; border-radius: 6px;
+    color: var(--text-dim); cursor: pointer;
+    transition: background 100ms, color 100ms;
+  }
+  .pk-rev:hover { background: var(--hover); color: var(--text); }
+  .pk-rev:active { transform: scale(0.92); }
+  .pk-rev svg { width: 16px; height: 16px; display: block; }
+  .picker.ftype-radial .pk-rev { margin-left: auto; }
+
+  .pk-sv {
+    position: relative;
+    width: 100%;
+    height: 140px;
+    border-radius: 4px;
+    cursor: crosshair;
+    background:
+      linear-gradient(to top, #000, transparent),
+      linear-gradient(to right, #fff, transparent),
+      hsl(var(--pk-hue, 0), 100%, 50%);
+    margin-bottom: 10px;
+  }
+  .pk-sv-thumb {
+    position: absolute;
+    width: 12px; height: 12px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+  }
+  .pk-bars {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .pk-eye {
+    width: 24px; height: 24px;
+    background: transparent;
+    border: 1px solid #444;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  .pk-eye:hover { background: var(--hover); color: var(--text); }
+  .pk-eye svg { width: 14px; height: 14px; }
+  .pk-strips { display: flex; flex-direction: column; gap: 6px; }
+  .pk-hue {
+    height: 10px;
+    border-radius: 5px;
+    background: linear-gradient(to right,
+      hsl(0,100%,50%), hsl(60,100%,50%), hsl(120,100%,50%),
+      hsl(180,100%,50%), hsl(240,100%,50%), hsl(300,100%,50%), hsl(360,100%,50%));
+    position: relative;
+    cursor: pointer;
+  }
+  .pk-alpha {
+    height: 10px;
+    border-radius: 5px;
+    position: relative;
+    cursor: pointer;
+    background-image:
+      linear-gradient(45deg, #555 25%, transparent 25%),
+      linear-gradient(-45deg, #555 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #555 75%),
+      linear-gradient(-45deg, transparent 75%, #555 75%);
+    background-size: 6px 6px;
+    background-position: 0 0, 0 3px, 3px -3px, -3px 0;
+  }
+  .pk-alpha-grad {
+    position: absolute; inset: 0;
+    border-radius: 5px;
+    background: linear-gradient(to right, transparent, var(--pk-color, #ffd400));
+  }
+  .pk-thumb-bar {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 14px; height: 14px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    pointer-events: none;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+    background: transparent;
+  }
+  /* Combined Figma-style field: [ Hex ▾ | value(s) | 100 % ] */
+  .pk-fields {
+    display: flex;
+    align-items: stretch;
+    height: 30px;
+    background: var(--workspace);
+    border-radius: 6px;
+  }
+  .pk-fields > * + * { border-left: 1px solid rgba(255,255,255,0.07); }
+  .pk-format-dropdown {
+    position: relative;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    padding: 0 17px 0 9px;
+    cursor: pointer;
+  }
+  .pk-format-dropdown select {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    outline: none;
+    padding: 0;
+    width: 100%;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .pk-format-dropdown select option { background: var(--sidebar); color: var(--text); }
+  .pk-format-dropdown::after {
+    content: '▾';
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-mute);
+    font-size: 8px;
+    pointer-events: none;
+  }
+  .pk-format-group {
+    display: none;
+    flex: 1;
+    min-width: 0;
+  }
+  .pk-format-group.active { display: flex; }
+  .pk-format-group > .pk-field { flex: 1; }
+  .pk-format-group > .pk-field + .pk-field { border-left: 1px solid rgba(255,255,255,0.07); }
+  .pk-field {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0 9px;
+    min-width: 0;
+  }
+  .pk-field input {
+    width: 100%;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    outline: none;
+    text-align: left;
+    padding: 0;
+    -moz-appearance: textfield;
+  }
+  .pk-field input[type="text"] { text-transform: uppercase; }
+  .pk-field input::-webkit-outer-spin-button,
+  .pk-field input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .pk-field.alpha {
+    flex: 0 0 52px;
+    justify-content: flex-end;
+  }
+  .pk-field.alpha input { text-align: right; }
+  .pk-suffix {
+    color: var(--text-mute);
+    font-size: 11px;
+    pointer-events: none;
+  }
+
+  /* Top-left strip — Template + Style dropdowns side by side */
+  .topleft-strip {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    display: flex;
+    gap: 8px;
+    z-index: 50;
+  }
+  .template-control,
+  .style-control {
+    background: var(--sidebar);
+    border-radius: 6px;
+    padding: 3px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
+    user-select: none;
+  }
+  .template-control { min-width: 170px; }
+  .style-control { min-width: 130px; }
+  .template-dropdown,
+  .style-dropdown { width: 100%; }
+  .template-dropdown .dropdown-btn,
+  .style-dropdown .dropdown-btn { padding: 4px 8px; }
+  .template-dropdown .dropdown-btn { gap: 6px; }
+  .style-dropdown .dropdown-btn { gap: 8px; }
+  .template-dropdown .dropdown-menu,
+  .style-dropdown .dropdown-menu {
+    left: 0;
+    top: calc(100% + 6px);
+    min-width: 180px;
+  }
+  .template-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    line-height: 1.2;
+  }
+  .template-item .name { font-size: 11px; }
+  .template-item .size { font-size: 9px; color: var(--text-mute); }
+  .dropdown-item:hover .template-item .size { color: rgba(255,255,255,0.75); }
+
+  /* Style swatch — gradient preview chip */
+  .style-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
+  }
+  .style-swatch.custom {
+    background-image:
+      linear-gradient(45deg, #555 25%, transparent 25%),
+      linear-gradient(-45deg, #555 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #555 75%),
+      linear-gradient(-45deg, transparent 75%, #555 75%);
+    background-size: 6px 6px;
+    background-position: 0 0, 0 3px, 3px -3px, -3px 0;
+  }
+  .style-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Tertiary button — used for minimize under Insert */
+  .btn-tertiary {
+    background: transparent;
+    color: var(--text-dim);
+    border: none;
+    padding: 6px 8px;
+    font: inherit;
+    cursor: pointer;
+    border-radius: 4px;
+    width: 100%;
+    margin-top: 6px;
+    transition: background 100ms, color 100ms;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .btn-tertiary:hover { background: var(--hover); color: var(--text); }
+  .btn-tertiary svg { width: 12px; height: 12px; display: block; }
+
+  /* Export controls */
+  .export-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+
+  /* Zoom control — fixed top-right, 32px from sidebar */
+  .zoom-control {
+    position: fixed;
+    top: 16px;
+    right: calc(280px + 16px);
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    background: var(--sidebar);
+    border-radius: 6px;
+    padding: 3px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
+    z-index: 50;
+    user-select: none;
+  }
+  .zoom-btn {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 8px;
+    border-radius: 4px;
+    line-height: 22px;
+    min-width: 22px;
+  }
+  .zoom-btn:hover { background: var(--hover); }
+  .zoom-dropdown { width: 60px; }
+  .zoom-dropdown .dropdown-btn { padding: 4px 6px; }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20,20,22,0.95);
+    color: var(--text);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 150ms;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    z-index: 2000;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <filter id="goo">
+      <feGaussianBlur id="gooBlur" in="SourceGraphic" stdDeviation="12" result="blur"/>
+      <feColorMatrix id="gooMatrix" in="blur" mode="matrix"
+        values="1 0 0 0 0
+                0 1 0 0 0
+                0 0 1 0 0
+                0 0 0 100 -49" result="shape"/>
+      <feFlood id="gooFlood" flood-color="#ffd400" flood-opacity="1" result="flood"/>
+      <feComposite in="flood" in2="shape" operator="in"/>
+    </filter>
+  </defs>
+</svg>
+
+<div class="app">
+  <div class="canvas-area" id="canvasArea">
+    <div class="artboard-wrap" id="artboardWrap">
+      <div class="artboard-label" id="artboardLabel">800 × 400</div>
+      <div class="artboard" id="artboard">
+        <div class="stage" id="stage">
+          <div class="blobs" id="blobs"></div>
+          <svg class="blobs-grad" id="blobsGrad" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div class="grid-layer" id="grid"></div>
+          <div class="brush-preview" id="brushPreview"></div>
+        </div>
+      </div>
+      <div class="resize-handle" id="resizeHandle"></div>
+    </div>
+    <div class="brush-control" id="brushControl">
+      <span class="brush-icon" title="Brush size">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 2l2 2-5.5 5.5h-2v-2z"/>
+          <path d="M4.5 9.5v1.5a1.5 1.5 0 01-3 0v-.5"/>
+        </svg>
+      </span>
+      <input type="range" id="brushSize" min="1" max="8" value="1" step="1">
+      <span class="brush-value" id="brushValue">1</span>
+    </div>
+  </div>
+
+  <aside class="sidebar">
+    <div class="section">
+      <button class="section-head" type="button"><span class="caret">▾</span>Artboard</button>
+      <div class="section-body">
+        <div class="row pair">
+          <div class="field" data-scrub="bannerW">
+            <span class="ico" title="Width"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6h8M3 4l-1 2 1 2M9 4l1 2-1 2"/></svg></span>
+            <input type="number" id="bannerW" value="800" min="1">
+          </div>
+          <div class="field" data-scrub="bannerH">
+            <span class="ico" title="Height"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2v8M4 3l2-1 2 1M4 9l2 1 2-1"/></svg></span>
+            <input type="number" id="bannerH" value="400" min="1">
+          </div>
+        </div>
+        <div class="row">
+          <div class="field" data-scrub="padding" style="flex:1">
+            <span class="ico" title="Padding"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1"><rect x="1" y="1" width="10" height="10"/><rect x="3.5" y="3.5" width="5" height="5" stroke-dasharray="1.2 1"/></svg></span>
+            <input type="number" id="padding" value="40" min="0">
+          </div>
+        </div>
+        <div class="subdiv"></div>
+        <div class="color-row" data-color="artboard">
+          <button class="swatch" id="artboardSwatch" type="button" tabindex="-1"></button>
+          <input type="text" class="color-hex-input" id="artboardHexInput" maxlength="7" value="2A2A2A">
+          <div class="field" data-scrub="artboardAlpha">
+            <input type="number" id="artboardAlphaInput" min="0" max="100" value="100">
+            <span class="ico" style="font-size:10px">%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <button class="section-head" type="button"><span class="caret">▾</span>Grid</button>
+      <div class="section-body">
+        <div class="row pair">
+          <div class="field" data-scrub="cols">
+            <span class="ico" title="Columns"><svg viewBox="0 0 12 12" fill="currentColor"><rect x="1" y="1" width="2.5" height="10"/><rect x="4.75" y="1" width="2.5" height="10"/><rect x="8.5" y="1" width="2.5" height="10"/></svg></span>
+            <input type="number" id="cols" value="9" min="1" max="64">
+          </div>
+          <div class="field" data-scrub="rows">
+            <span class="ico" title="Rows"><svg viewBox="0 0 12 12" fill="currentColor"><rect x="1" y="1" width="10" height="2.5"/><rect x="1" y="4.75" width="10" height="2.5"/><rect x="1" y="8.5" width="10" height="2.5"/></svg></span>
+            <input type="number" id="rows" value="4" min="1" max="64">
+          </div>
+        </div>
+        <div class="row">
+          <div class="field" data-scrub="gridStroke" data-step="0.1" style="flex:1">
+            <span class="ico" title="Stroke"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="2" y1="3.5" x2="10" y2="3.5" stroke-width="0.5"/><line x1="2" y1="6" x2="10" y2="6" stroke-width="1.5"/><line x1="2" y1="9" x2="10" y2="9" stroke-width="2.5"/></svg></span>
+            <input type="number" id="gridStroke" value="0.5" min="0" max="8" step="0.1">
+          </div>
+        </div>
+        <div class="info">Cell: <span id="cellInfo">80 × 80</span> px</div>
+        <div class="stepper-row">
+          <span class="lbl">Fit</span>
+          <div class="stepper" id="fitStepper"></div>
+        </div>
+        <div class="subdiv"></div>
+        <div class="color-row" data-color="grid">
+          <button class="swatch" id="gridSwatch" type="button" tabindex="-1"></button>
+          <input type="text" class="color-hex-input" id="gridHexInput" maxlength="7" value="FFFFFF">
+          <div class="field" data-scrub="gridAlpha">
+            <input type="number" id="gridAlphaInput" min="0" max="100" value="10">
+            <span class="ico" style="font-size:10px">%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <button class="section-head" type="button"><span class="caret">▾</span>Box</button>
+      <div class="section-body">
+        <div class="color-row" data-color="box">
+          <button class="swatch" id="boxSwatch" type="button" tabindex="-1"></button>
+          <input type="text" class="color-hex-input" id="boxHexInput" maxlength="7" value="FFD400">
+          <div class="field" data-scrub="boxAlpha">
+            <input type="number" id="boxAlphaInput" min="0" max="100" value="100">
+            <span class="ico" style="font-size:10px">%</span>
+          </div>
+        </div>
+        <div class="subdiv"></div>
+        <div class="row">
+          <div class="field select-field" style="flex:1">
+            <select id="shape">
+              <option value="square">Square</option>
+              <option value="circle">Circle</option>
+              <option value="diamond">Diamond</option>
+              <option value="triangle">Triangle</option>
+              <option value="plus">Plus</option>
+            </select>
+            <span class="caret">▾</span>
+          </div>
+        </div>
+        <div class="slider-row">
+          <span class="lbl">Rounding</span>
+          <input type="range" id="boxR" min="0" max="25" value="8">
+          <span class="val" id="boxRVal">8</span>
+        </div>
+        <div class="slider-row">
+          <span class="lbl">Connector</span>
+          <input type="range" id="neckR" min="0" max="25" value="12">
+          <span class="val" id="neckRVal">12</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section no-head">
+      <div class="section-body">
+        <div class="export-row">
+          <div class="field select-field"><select id="exportScale">
+            <option value="1">1x</option>
+            <option value="2">2x</option>
+            <option value="3">3x</option>
+            <option value="4">4x</option>
+          </select><span class="caret">▾</span></div>
+          <div class="field select-field"><select id="exportFormat">
+            <option value="svg">SVG</option>
+            <option value="png">PNG</option>
+            <option value="jpg">JPG</option>
+          </select><span class="caret">▾</span></div>
+        </div>
+        <button class="btn" id="exportBtn">Export <span id="exportLabel">SVG</span></button>
+        <button class="btn-tertiary" id="copySvgBtn" type="button" title="Copy SVG markup to clipboard — paste straight into Figma">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="6.8" height="6.8" rx="1.2"/><path d="M8.5 3.5V2.2A1.2 1.2 0 0 0 7.3 1H2.2A1.2 1.2 0 0 0 1 2.2v5.1A1.2 1.2 0 0 0 2.2 8.5h1.3"/></svg>
+          Copy SVG
+        </button>
+        <button class="btn-tertiary" id="resetBtn" type="button" title="Clear the canvas and restore the selected style's base screen">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4.5A4 4 0 1 0 10 7"/><path d="M9.5 1.8v2.7H6.8"/></svg>
+          Reset
+        </button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- Top-left strip: Template + Style dropdowns -->
+<div class="topleft-strip">
+  <div class="template-control" id="templateControl">
+    <div class="dropdown template-dropdown" id="templateDropdown">
+      <button class="dropdown-btn" type="button" tabindex="-1">
+        <span class="dropdown-label" id="templateLabel">Slider banner</span>
+        <span class="dropdown-caret">▾</span>
+      </button>
+      <div class="dropdown-menu">
+        <button class="dropdown-item selected" data-template="slider" type="button">
+          <span class="dropdown-check">✓</span>
+          <span class="template-item"><span class="name">Slider banner</span><span class="size">800 × 400</span></span>
+        </button>
+        <button class="dropdown-item" data-template="category" type="button">
+          <span class="dropdown-check">✓</span>
+          <span class="template-item"><span class="name">Category banner</span><span class="size">299 × 440</span></span>
+        </button>
+        <button class="dropdown-item" data-template="custom" type="button">
+          <span class="dropdown-check">✓</span>
+          <span class="template-item"><span class="name">Custom</span><span class="size">Free size</span></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="style-control" id="styleControl">
+    <div class="dropdown style-dropdown" id="styleDropdown">
+      <button class="dropdown-btn" type="button" tabindex="-1">
+        <span class="style-swatch custom" id="styleSwatchActive"></span>
+        <span class="dropdown-label" id="styleLabel">Custom</span>
+        <span class="dropdown-caret">▾</span>
+      </button>
+      <div class="dropdown-menu">
+        <button class="dropdown-item selected" data-style="custom" type="button">
+          <span class="dropdown-check">✓</span>
+          <span class="style-item"><span class="style-swatch custom"></span><span>Custom</span></span>
+        </button>
+        <button class="dropdown-item" data-style="blue" type="button">
+          <span class="dropdown-check">✓</span>
+          <span class="style-item"><span class="style-swatch" style="background:linear-gradient(135deg,#1470BD,#49B8EC)"></span><span>Blue</span></span>
+        </button>
+        <button class="dropdown-item" data-style="purple" type="button">
+          <span class="dropdown-check">✓</span>
+          <span class="style-item"><span class="style-swatch" style="background:linear-gradient(135deg,#6C22C9,#B95CFF)"></span><span>Purple</span></span>
+        </button>
+        <button class="dropdown-item" data-style="silver" type="button">
+          <span class="dropdown-check">✓</span>
+          <span class="style-item"><span class="style-swatch" style="background:linear-gradient(135deg,#59636A,#A5ADB2)"></span><span>Silver</span></span>
+        </button>
+        <button class="dropdown-item" data-style="white" type="button">
+          <span class="dropdown-check">✓</span>
+          <span class="style-item"><span class="style-swatch" style="background:linear-gradient(135deg,#A4AFB6,#F3F5F7)"></span><span>White</span></span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Zoom control -->
+<div class="zoom-control" id="zoomControl">
+  <button class="zoom-btn" id="zoomOut" type="button" title="Zoom out">−</button>
+  <div class="dropdown zoom-dropdown" id="zoomDropdown">
+    <button class="dropdown-btn" type="button" tabindex="-1">
+      <span class="dropdown-label" id="zoomLabel">100%</span>
+      <span class="dropdown-caret">▾</span>
+    </button>
+    <div class="dropdown-menu">
+      <button class="dropdown-item" data-zoom="0.1" type="button"><span class="dropdown-check">✓</span><span>10%</span></button>
+      <button class="dropdown-item" data-zoom="0.25" type="button"><span class="dropdown-check">✓</span><span>25%</span></button>
+      <button class="dropdown-item" data-zoom="0.5" type="button"><span class="dropdown-check">✓</span><span>50%</span></button>
+      <button class="dropdown-item" data-zoom="0.75" type="button"><span class="dropdown-check">✓</span><span>75%</span></button>
+      <button class="dropdown-item selected" data-zoom="1" type="button"><span class="dropdown-check">✓</span><span>100%</span></button>
+      <button class="dropdown-item" data-zoom="1.5" type="button"><span class="dropdown-check">✓</span><span>150%</span></button>
+      <button class="dropdown-item" data-zoom="2" type="button"><span class="dropdown-check">✓</span><span>200%</span></button>
+      <button class="dropdown-item" data-zoom="4" type="button"><span class="dropdown-check">✓</span><span>400%</span></button>
+    </div>
+  </div>
+  <button class="zoom-btn" id="zoomIn" type="button" title="Zoom in">+</button>
+</div>
+
+<!-- Color picker popover -->
+<div class="picker" id="picker">
+  <div class="picker-head">
+    <span id="pkTitle">Color</span>
+    <button class="picker-close" id="pkClose">×</button>
+  </div>
+  <!-- Fill type row -->
+  <div class="pk-types" id="pkTypes">
+    <button class="pk-type-btn active" data-ftype="solid" type="button" title="Solid">
+      <svg viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2" fill="currentColor"/></svg>
+    </button>
+    <button class="pk-type-btn" data-ftype="linear" type="button" title="Linear">
+      <svg viewBox="0 0 16 16"><defs><linearGradient id="ic-lin" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="currentColor" stop-opacity="0.15"/><stop offset="1" stop-color="currentColor"/></linearGradient></defs><rect x="2" y="2" width="12" height="12" rx="2" fill="url(#ic-lin)"/></svg>
+    </button>
+    <button class="pk-type-btn" data-ftype="radial" type="button" title="Radial">
+      <svg viewBox="0 0 16 16"><defs><radialGradient id="ic-rad"><stop offset="0" stop-color="currentColor"/><stop offset="1" stop-color="currentColor" stop-opacity="0.15"/></radialGradient></defs><rect x="2" y="2" width="12" height="12" rx="2" fill="url(#ic-rad)"/></svg>
+    </button>
+    <button class="pk-type-btn" data-ftype="angular" type="button" title="Angular">
+      <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 8L8 2A6 6 0 0 1 14 8z" fill="currentColor"/></svg>
+    </button>
+  </div>
+  <!-- Gradient controls (only for gradient types) -->
+  <div class="pk-grad" id="pkGrad">
+    <div class="pk-grad-bar" id="pkGradBar"></div>
+    <div class="pk-grad-ctl">
+      <div class="pk-dial" id="pkDial" title="Drag to set gradient direction / position">
+        <div class="pk-dial-bg" id="pkDialBg"></div>
+        <div class="pk-dial-rot" id="pkDialRot">
+          <div class="pk-dial-arm"></div>
+          <div class="pk-dial-handle"></div>
+        </div>
+        <div class="pk-dial-pt" id="pkDialPt"></div>
+      </div>
+      <div class="pk-angle" id="pkAngleRow">
+        <span class="pk-angle-lbl">Angle</span>
+        <input type="number" id="pkAngle" min="0" max="360" value="135">
+        <span class="pk-angle-deg">°</span>
+      </div>
+      <button class="pk-rev" id="pkReverse" type="button" title="Reverse gradient">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 5.5h8l-2-2M13 10.5H5l2 2"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+  <div class="pk-sv" id="pkSV"><div class="pk-sv-thumb" id="pkSVThumb"></div></div>
+  <div class="pk-bars">
+    <button class="pk-eye" id="pkEye" title="Eyedropper">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M2 22l4-4 10-10 4 4-10 10-4 4-4-4z" transform="translate(2 -2)"/>
+        <path d="M15 6l3 3"/>
+        <circle cx="18.5" cy="5.5" r="2.5" fill="currentColor" stroke="none"/>
+      </svg>
+    </button>
+    <div class="pk-strips">
+      <div class="pk-hue" id="pkHue"><div class="pk-thumb-bar" id="pkHueThumb"></div></div>
+      <div class="pk-alpha" id="pkAlpha"><div class="pk-alpha-grad"></div><div class="pk-thumb-bar" id="pkAlphaThumb"></div></div>
+    </div>
+  </div>
+  <div class="pk-fields">
+    <div class="pk-format-dropdown">
+      <select id="pkFormat">
+        <option value="hex">Hex</option>
+        <option value="rgb">RGB</option>
+        <option value="hsl">HSL</option>
+        <option value="hsb">HSB</option>
+      </select>
+    </div>
+
+    <div class="pk-format-group hex active">
+      <div class="pk-field"><input type="text" id="pkHex" maxlength="6"></div>
+    </div>
+    <div class="pk-format-group rgb">
+      <div class="pk-field"><input type="number" id="pkR" min="0" max="255"></div>
+      <div class="pk-field"><input type="number" id="pkG" min="0" max="255"></div>
+      <div class="pk-field"><input type="number" id="pkB" min="0" max="255"></div>
+    </div>
+    <div class="pk-format-group hsl">
+      <div class="pk-field"><input type="number" id="pkHslH" min="0" max="360"></div>
+      <div class="pk-field"><input type="number" id="pkHslS" min="0" max="100"></div>
+      <div class="pk-field"><input type="number" id="pkHslL" min="0" max="100"></div>
+    </div>
+    <div class="pk-format-group hsb">
+      <div class="pk-field"><input type="number" id="pkHsbH" min="0" max="360"></div>
+      <div class="pk-field"><input type="number" id="pkHsbS" min="0" max="100"></div>
+      <div class="pk-field"><input type="number" id="pkHsbB" min="0" max="100"></div>
+    </div>
+
+    <div class="pk-field alpha"><input type="number" id="pkA" min="0" max="100"><span class="pk-suffix">%</span></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  const state = {
+    bannerW: 800, bannerH: 400, padding: 40,
+    artboardColor: '#2a2a2a', artboardAlpha: 100,
+    cols: 18, rows: 8, gridStroke: 0.5,
+    gridColor: '#ffffff', gridAlpha: 10,
+    boxColor: '#ffd400', boxAlpha: 100,
+    // Paint objects for gradient-capable targets (artboard, box).
+    // { type:'solid'|'linear'|'radial'|'angular', angle, stops:[{color,alpha,pos}] }
+    // For solid, stops[0] is the colour; mirrored into {target}Color/{target}Alpha.
+    artboardPaint: { type: 'solid', angle: 135, stops: [{ color: '#2a2a2a', alpha: 100, pos: 0 }, { color: '#000000', alpha: 100, pos: 1 }] },
+    boxPaint:      { type: 'solid', angle: 135, stops: [{ color: '#ffd400', alpha: 100, pos: 0 }, { color: '#ffffff', alpha: 100, pos: 1 }] },
+    shape: 'square',
+    boxR: 8,
+    neckR: 12,
+    brushSize: 1,
+    exportScale: 1,
+    exportFormat: 'svg',
+    style: 'custom',
+  };
+  const filled = new Set();
+
+  const $ = id => document.getElementById(id);
+  const artboard = $('artboard'), stage = $('stage'), grid = $('grid'), blobs = $('blobs');
+  const gooBlur = $('gooBlur'), gooFlood = $('gooFlood'), gooMatrix = $('gooMatrix');
+  // Goo neck thickness → colorMatrix alpha cut point. Higher neckR cuts lower
+  // (alpha ≈0.5 at diagonal touch), making necks bolder. M kept high for sharp edges.
+  function gooMatrixValues(neckR) {
+    const M = 100;
+    const cutAlpha = 0.5 - (Math.max(0, Math.min(25, neckR)) / 25) * 0.13; // 0.5 → 0.37
+    const offset = (M * cutAlpha).toFixed(2);
+    return `1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 ${M} -${offset}`;
+  }
+  const cellInfo = $('cellInfo'), artboardLabel = $('artboardLabel');
+
+  const cellW = () => (state.bannerW - 2 * state.padding) / state.cols;
+  const cellH = () => (state.bannerH - 2 * state.padding) / state.rows;
+
+  const SHAPE_CLIP = {
+    square:   'none',
+    circle:   'circle(50% at 50% 50%)',
+    diamond:  'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
+    triangle: 'polygon(50% 0%, 100% 100%, 0% 100%)',
+    plus:     'polygon(35% 0%, 65% 0%, 65% 35%, 100% 35%, 100% 65%, 65% 65%, 65% 100%, 35% 100%, 35% 65%, 0% 65%, 0% 35%, 35% 35%)'
+  };
+  function buildShapeSvg(shape, c, fill) {
+    const cx = c.x + c.w/2, cy = c.y + c.h/2;
+    if (shape === 'circle') return `<ellipse cx="${cx}" cy="${cy}" rx="${c.w/2}" ry="${c.h/2}" fill="${fill}"/>`;
+    if (shape === 'diamond') {
+      const pts = [[cx,c.y],[c.x+c.w,cy],[cx,c.y+c.h],[c.x,cy]];
+      return `<polygon points="${pts.map(p=>p.join(',')).join(' ')}" fill="${fill}"/>`;
+    }
+    if (shape === 'triangle') {
+      const pts = [[cx,c.y],[c.x+c.w,c.y+c.h],[c.x,c.y+c.h]];
+      return `<polygon points="${pts.map(p=>p.join(',')).join(' ')}" fill="${fill}"/>`;
+    }
+    if (shape === 'plus') {
+      const xs=[c.x, c.x+c.w*0.35, c.x+c.w*0.65, c.x+c.w];
+      const ys=[c.y, c.y+c.h*0.35, c.y+c.h*0.65, c.y+c.h];
+      const pts = [[xs[1],ys[0]],[xs[2],ys[0]],[xs[2],ys[1]],[xs[3],ys[1]],[xs[3],ys[2]],[xs[2],ys[2]],[xs[2],ys[3]],[xs[1],ys[3]],[xs[1],ys[2]],[xs[0],ys[2]],[xs[0],ys[1]],[xs[1],ys[1]]];
+      return `<polygon points="${pts.map(p=>p.join(',')).join(' ')}" fill="${fill}"/>`;
+    }
+    // Goo source rects stay sharp — the goo filter does all the rounding
+    return `<rect x="${c.x}" y="${c.y}" width="${c.w}" height="${c.h}" fill="${fill}"/>`;
+  }
+
+  /* --- Color helpers --- */
+  const hexToRgb = hex => {
+    const h = hex.replace('#', '');
+    return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+  };
+  const rgbToHex = (r,g,b) => '#' + [r,g,b].map(v => Math.round(v).toString(16).padStart(2,'0')).join('');
+  const rgba = (hex, ap) => { const [r,g,b] = hexToRgb(hex); return `rgba(${r},${g},${b},${ap/100})`; };
+
+  /* ---- Paint model ---------------------------------------------------------
+     A paint is { type, angle, stops:[{color,alpha,pos}] }. For 'solid' only
+     stops[0] matters. Helpers convert a paint to a CSS background string and to
+     SVG (gradient def + fill ref), used by both live preview and export. */
+  function sortedStops(p) { return p.stops.slice().sort((a, b) => a.pos - b.pos); }
+
+  function paintToCSS(p) {
+    if (!p || p.type === 'solid') {
+      const s = p.stops[0]; return rgba(s.color, s.alpha);
+    }
+    const list = sortedStops(p).map(s => `${rgba(s.color, s.alpha)} ${(s.pos * 100).toFixed(1)}%`).join(', ');
+    if (p.type === 'linear')  return `linear-gradient(${p.angle}deg, ${list})`;
+    if (p.type === 'radial')  return `radial-gradient(circle at ${((p.cx ?? 0.5) * 100).toFixed(1)}% ${((p.cy ?? 0.5) * 100).toFixed(1)}%, ${list})`;
+    if (p.type === 'angular') return `conic-gradient(from ${p.angle}deg at center, ${list})`;
+    return rgba(p.stops[0].color, p.stops[0].alpha);
+  }
+
+  // Returns { def: '<linearGradient.../>' or '', fill: '#hex'|'url(#id)', opacity: 0..1 }
+  function paintToSVG(p, id) {
+    if (!p || p.type === 'solid') {
+      const s = p.stops[0]; return { def: '', fill: s.color, opacity: s.alpha / 100 };
+    }
+    const stopsXml = sortedStops(p).map(s =>
+      `<stop offset="${(s.pos * 100).toFixed(1)}%" stop-color="${s.color}" stop-opacity="${(s.alpha / 100).toFixed(3)}"/>`
+    ).join('');
+    let def;
+    if (p.type === 'radial') {
+      const rcx = (p.cx ?? 0.5), rcy = (p.cy ?? 0.5);
+      // Grow radius so the gradient still fills the box when the centre is off-centre.
+      const r = 0.5 + Math.max(Math.abs(rcx - 0.5), Math.abs(rcy - 0.5));
+      def = `<radialGradient id="${id}" cx="${rcx.toFixed(4)}" cy="${rcy.toFixed(4)}" r="${r.toFixed(4)}">${stopsXml}</radialGradient>`;
+    } else {
+      // linear (angular falls back to linear in SVG — no native conic). CSS angle
+      // (0deg = up) → unit vector (sinθ, -cosθ); span from center ∓ 0.5·dir.
+      const rad = (p.angle || 0) * Math.PI / 180;
+      const dx = Math.sin(rad) * 0.5, dy = -Math.cos(rad) * 0.5;
+      def = `<linearGradient id="${id}" x1="${(0.5 - dx).toFixed(4)}" y1="${(0.5 - dy).toFixed(4)}" x2="${(0.5 + dx).toFixed(4)}" y2="${(0.5 + dy).toFixed(4)}">${stopsXml}</linearGradient>`;
+    }
+    return { def, fill: `url(#${id})`, opacity: 1 };
+  }
+
+  // Mirror solid paint into legacy {target}Color/{target}Alpha so existing code paths
+  // (goo feFlood, swatches, etc.) keep working for the common solid case.
+  function syncPaintToLegacy(target) {
+    const p = state[target + 'Paint'];
+    if (p && p.type === 'solid') {
+      state[target + 'Color'] = p.stops[0].color;
+      state[target + 'Alpha'] = p.stops[0].alpha;
+    }
+  }
+  // Convert a solid paint to a 2-stop gradient (colour → transparent) when switching type
+  function solidToStops(p) {
+    const c = p.stops[0];
+    return [{ color: c.color, alpha: c.alpha, pos: 0 }, { color: c.color, alpha: 0, pos: 1 }];
+  }
+  // Primary colour/alpha for a target: grid is solid; artboard/box use paint stops[0].
+  function targetPrimary(target) {
+    if (target === 'grid') return { color: state.gridColor, alpha: state.gridAlpha };
+    const p = state[target + 'Paint'];
+    return { color: p.stops[0].color, alpha: p.stops[0].alpha };
+  }
+  function setTargetPrimary(target, color, alpha) {
+    if (target === 'grid') {
+      if (color != null) state.gridColor = color;
+      if (alpha != null) state.gridAlpha = alpha;
+    } else {
+      const p = state[target + 'Paint'];
+      if (color != null) p.stops[0].color = color;
+      if (alpha != null) p.stops[0].alpha = alpha;
+    }
+  }
+
+  function rgbToHsv(r,g,b) {
+    r/=255; g/=255; b/=255;
+    const mx = Math.max(r,g,b), mn = Math.min(r,g,b), d = mx-mn;
+    let h = 0;
+    if (d) {
+      if (mx===r) h = ((g-b)/d)%6;
+      else if (mx===g) h = (b-r)/d + 2;
+      else h = (r-g)/d + 4;
+      h *= 60;
+      if (h<0) h += 360;
+    }
+    return [h, mx?d/mx:0, mx];
+  }
+  function hsvToRgb(h,s,v) {
+    const c = v*s, x = c*(1-Math.abs(((h/60)%2)-1)), m = v-c;
+    let r,g,b;
+    if (h<60)      { r=c; g=x; b=0; }
+    else if (h<120){ r=x; g=c; b=0; }
+    else if (h<180){ r=0; g=c; b=x; }
+    else if (h<240){ r=0; g=x; b=c; }
+    else if (h<300){ r=x; g=0; b=c; }
+    else           { r=c; g=0; b=x; }
+    return [(r+m)*255, (g+m)*255, (b+m)*255];
+  }
+  function rgbToHsl(r, g, b) {
+    r/=255; g/=255; b/=255;
+    const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
+    let h = 0, s = 0;
+    const l = (mx + mn) / 2;
+    if (mx !== mn) {
+      const d = mx - mn;
+      s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+      if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+      else if (mx === g) h = ((b - r) / d + 2) * 60;
+      else h = ((r - g) / d + 4) * 60;
+    }
+    return [h, s, l];
+  }
+  function hslToRgb(h, s, l) {
+    h /= 360;
+    if (s === 0) return [l * 255, l * 255, l * 255];
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    return [
+      hue2rgb(p, q, h + 1/3) * 255,
+      hue2rgb(p, q, h) * 255,
+      hue2rgb(p, q, h - 1/3) * 255
+    ];
+  }
+
+  /* --- Render --- */
+  function rebuildGrid() {
+    const cw = cellW(), ch = cellH();
+    grid.style.gridTemplateColumns = `repeat(${state.cols}, ${cw}px)`;
+    grid.style.gridTemplateRows = `repeat(${state.rows}, ${ch}px)`;
+    grid.innerHTML = '';
+    for (let r = 0; r < state.rows; r++) {
+      for (let c = 0; c < state.cols; c++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell' + (r === 0 ? ' first-row' : '') + (c === 0 ? ' first-col' : '');
+        cell.dataset.r = r; cell.dataset.c = c;
+        grid.appendChild(cell);
+      }
+    }
+  }
+  function render() {
+    const cw = cellW(), ch = cellH();
+    const boxGradient = state.boxPaint.type !== 'solid';
+    document.body.setAttribute('data-box-grad', boxGradient ? '1' : '0');
+
+    blobs.innerHTML = '';
+    for (const key of filled) {
+      const [r, c] = key.split(',').map(Number);
+      const blob = document.createElement('div');
+      blob.className = 'blob';
+      blob.style.left = (c * cw) + 'px';
+      blob.style.top = (r * ch) + 'px';
+      blob.style.width = cw + 'px';
+      blob.style.height = ch + 'px';
+      blobs.appendChild(blob);
+    }
+
+    if (boxGradient) renderBoxGradientLive(cw, ch);
+  }
+
+  // Gradient box live preview: goo silhouette (blur+threshold of white cells) used
+  // as a luminance mask over a gradient-filled rect. Same look as the solid goo path.
+  function renderBoxGradientLive(cw, ch) {
+    const svg = $('blobsGrad');
+    const innerW = state.bannerW - 2 * state.padding;
+    const innerH = state.bannerH - 2 * state.padding;
+    svg.setAttribute('viewBox', `0 0 ${innerW} ${innerH}`);
+    svg.setAttribute('width', innerW);
+    svg.setAttribute('height', innerH);
+    if (filled.size === 0) { svg.innerHTML = ''; return; }
+    let cells = '';
+    for (const key of filled) {
+      const [r, c] = key.split(',').map(Number);
+      cells += `<rect x="${c * cw}" y="${r * ch}" width="${cw}" height="${ch}" fill="#fff"/>`;
+    }
+    const g = paintToSVG(state.boxPaint, 'boxGradLive');
+    svg.innerHTML = `
+      <defs>
+        <filter id="gooSilLive" x="-10%" y="-10%" width="120%" height="120%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="${Math.max(state.boxR, 0.001)}" result="b"/>
+          <feColorMatrix in="b" values="${gooMatrixValues(state.neckR)}"/>
+        </filter>
+        <mask id="boxMaskLive">
+          <g filter="url(#gooSilLive)">${cells}</g>
+        </mask>
+        ${g.def}
+      </defs>
+      <rect x="0" y="0" width="${innerW}" height="${innerH}" fill="${g.fill}" fill-opacity="${g.opacity}" mask="url(#boxMaskLive)"/>
+    `;
+  }
+
+  function syncInputs() {
+    $('bannerW').value = state.bannerW;
+    $('bannerH').value = state.bannerH;
+    $('padding').value = state.padding;
+    $('cols').value = state.cols;
+    $('rows').value = state.rows;
+    $('gridStroke').value = state.gridStroke;
+    $('boxR').value = state.boxR;     $('boxRVal').textContent = state.boxR;
+    $('neckR').value = state.neckR;   $('neckRVal').textContent = state.neckR;
+    for (const t of ['artboard','grid','box']) {
+      const hexEl = $(`${t}HexInput`);
+      const alphaEl = $(`${t}AlphaInput`);
+      const prim = targetPrimary(t);
+      if (document.activeElement !== hexEl) hexEl.value = prim.color.replace('#','').toUpperCase();
+      if (document.activeElement !== alphaEl) alphaEl.value = prim.alpha;
+    }
+    $('shape').value = state.shape;
+  }
+
+  function applyAll() {
+    const innerW = state.bannerW - 2 * state.padding;
+    const innerH = state.bannerH - 2 * state.padding;
+
+    artboard.style.width = state.bannerW + 'px';
+    artboard.style.height = state.bannerH + 'px';
+    artboard.style.padding = state.padding + 'px';
+    stage.style.width = innerW + 'px';
+    stage.style.height = innerH + 'px';
+
+    const cw = cellW(), ch = cellH();
+    cellInfo.textContent = `${+cw.toFixed(1)} × ${+ch.toFixed(1)}`;
+    artboardLabel.textContent = `${state.bannerW} × ${state.bannerH}`;
+
+    for (const key of [...filled]) {
+      const [r, c] = key.split(',').map(Number);
+      if (r >= state.rows || c >= state.cols) filled.delete(key);
+    }
+    rebuildGrid();
+    if (typeof buildFitStepper === 'function') buildFitStepper();
+
+    // Keep legacy {target}Color/Alpha in sync from the paint objects (solid case)
+    syncPaintToLegacy('artboard');
+    syncPaintToLegacy('box');
+
+    document.documentElement.style.setProperty('--grid-line', rgba(state.gridColor, state.gridAlpha));
+    document.documentElement.style.setProperty('--grid-stroke', state.gridStroke + 'px');
+
+    // Artboard fill from its paint (solid or gradient); mirrored onto sidebar swatch
+    const artboardBg = paintToCSS(state.artboardPaint);
+    document.documentElement.style.setProperty('--artboard-color', artboardBg);
+
+    const boxGradient = state.boxPaint.type !== 'solid';
+    document.documentElement.style.setProperty('--blob-color', state.boxColor);
+    document.documentElement.style.setProperty('--blob-clip', SHAPE_CLIP[state.shape] || 'none');
+    // Goo mode: sharp source cells tile + merge; boxR → blur radius (shape rounding),
+    // neckR → colorMatrix cut (neck thickness).
+    document.documentElement.style.setProperty('--blob-radius', '0');
+    gooBlur.setAttribute('stdDeviation', Math.max(state.boxR, 0.001));
+    gooMatrix.setAttribute('values', gooMatrixValues(state.neckR));
+    // Solid box → goo feFlood path (.blobs div). Gradient box → SVG mask overlay.
+    gooFlood.setAttribute('flood-color', boxGradient ? '#ffffff' : state.boxColor);
+    gooFlood.setAttribute('flood-opacity', boxGradient ? 1 : state.boxAlpha / 100);
+
+    $('artboardSwatch').style.setProperty('--sw-color', artboardBg);
+    $('gridSwatch').style.setProperty('--sw-color', rgba(state.gridColor, state.gridAlpha));
+    $('boxSwatch').style.setProperty('--sw-color', paintToCSS(state.boxPaint));
+
+    syncInputs();
+    render();
+  }
+
+  /* --- Undo / Redo --- */
+  const past = [];
+  const future = [];
+  const MAX_HISTORY = 100;
+
+  function snap() {
+    return JSON.stringify({ state, filled: [...filled] });
+  }
+  function restore(s) {
+    const d = JSON.parse(s);
+    Object.assign(state, d.state);
+    filled.clear();
+    for (const k of d.filled) filled.add(k);
+    applyAll();
+    if (picker.classList.contains('open') && pkState.target) {
+      const hex = state[pkState.target + 'Color'];
+      const [r,g,b] = hexToRgb(hex);
+      const [h,s2,v] = rgbToHsv(r,g,b);
+      pkState.h = h; pkState.s = s2; pkState.v = v;
+      pkState.a = state[pkState.target + 'Alpha'];
+      syncPicker();
+    }
+  }
+  function pushHistory(label) {
+    past.push(snap());
+    if (past.length > MAX_HISTORY) past.shift();
+    future.length = 0;
+  }
+  function undo() {
+    if (!past.length) return;
+    future.push(snap());
+    restore(past.pop());
+    toast('Undo');
+  }
+  function redo() {
+    if (!future.length) return;
+    past.push(snap());
+    restore(future.pop());
+    toast('Redo');
+  }
+  window.addEventListener('keydown', e => {
+    const meta = e.ctrlKey || e.metaKey;
+    if (!meta) return;
+    if (e.key === 'z' || e.key === 'Z') {
+      e.preventDefault();
+      if (e.shiftKey) redo(); else undo();
+    } else if (e.key === 'y' || e.key === 'Y') {
+      e.preventDefault();
+      redo();
+    } else if (e.key === '0') {
+      e.preventDefault();
+      setZoom(1);
+      state.panX = 0; state.panY = 0; applyPan();
+    }
+  });
+
+  /* --- Toast --- */
+  const toastEl = $('toast');
+  let toastTimer = null;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 900);
+  }
+
+  /* --- Drag painting --- */
+  let painting = false;
+  let paintMode = null;
+  function cellFromTarget(t) {
+    if (!t || !t.classList || !t.classList.contains('cell')) return null;
+    return { r: +t.dataset.r, c: +t.dataset.c, key: t.dataset.r + ',' + t.dataset.c };
+  }
+  function brushOrigin(cell) {
+    const off = Math.floor((state.brushSize - 1) / 2);
+    return { r: cell.r - off, c: cell.c - off, n: state.brushSize };
+  }
+  function applyPaint(cell) {
+    const { r: r0, c: c0, n } = brushOrigin(cell);
+    let dirty = false;
+    for (let dr = 0; dr < n; dr++) {
+      for (let dc = 0; dc < n; dc++) {
+        const r = r0 + dr, c = c0 + dc;
+        if (r < 0 || r >= state.rows || c < 0 || c >= state.cols) continue;
+        const key = r + ',' + c;
+        if (paintMode === 'paint') {
+          if (!filled.has(key)) { filled.add(key); dirty = true; }
+        } else {
+          if (filled.has(key)) { filled.delete(key); dirty = true; }
+        }
+      }
+    }
+    if (dirty) render();
+  }
+
+  const brushPreview = $('brushPreview');
+  let lastHoverCell = null;
+  function updateBrushPreview() {
+    if (!lastHoverCell) { brushPreview.classList.remove('show'); return; }
+    const { r: r0, c: c0, n } = brushOrigin(lastHoverCell);
+    const cw = cellW(), ch = cellH();
+    brushPreview.style.left = (c0 * cw) + 'px';
+    brushPreview.style.top  = (r0 * ch) + 'px';
+    brushPreview.style.width  = (cw * n) + 'px';
+    brushPreview.style.height = (ch * n) + 'px';
+    brushPreview.classList.add('show');
+  }
+
+  grid.addEventListener('contextmenu', e => {
+    if (cellFromTarget(e.target)) e.preventDefault();
+  });
+  grid.addEventListener('mousedown', e => {
+    const cell = cellFromTarget(e.target);
+    if (!cell) return;
+    if (e.button !== 0 && e.button !== 2) return;
+    e.preventDefault();
+    pushHistory('paint');
+    painting = true;
+    paintMode = e.button === 2 ? 'erase' : 'paint';
+    applyPaint(cell);
+  });
+  grid.addEventListener('mouseover', e => {
+    const cell = cellFromTarget(e.target);
+    if (cell) { lastHoverCell = cell; updateBrushPreview(); }
+    if (painting && cell) applyPaint(cell);
+  });
+  grid.addEventListener('mouseleave', () => {
+    lastHoverCell = null;
+    brushPreview.classList.remove('show');
+  });
+  window.addEventListener('mouseup', () => { painting = false; paintMode = null; });
+
+  // Brush size slider — also updates live preview if cursor over grid
+  $('brushSize').addEventListener('input', e => {
+    state.brushSize = +e.target.value;
+    $('brushValue').textContent = state.brushSize;
+    updateBrushPreview();
+  });
+
+  /* --- Scrub-drag on .field inputs --- */
+  function setupScrub(fieldEl) {
+    const input = fieldEl.querySelector('input');
+    if (!input) return;
+    const step = +fieldEl.dataset.step || 1;
+    const precision = step < 1 ? Math.max(0, Math.ceil(-Math.log10(step))) : 0;
+    // Select all on focus so typing replaces the value (works for tab + click→focus)
+    input.addEventListener('focus', () => requestAnimationFrame(() => {
+      try { input.select(); } catch (e) {}
+    }));
+    fieldEl.addEventListener('mousedown', e => {
+      if (document.activeElement === input) return;
+      if (e.target.tagName === 'SELECT') return;
+      e.preventDefault();
+      const startX = e.clientX;
+      const startVal = +input.value || 0;
+      let moved = false;
+      const move = ev => {
+        const dx = ev.clientX - startX;
+        if (!moved && Math.abs(dx) > 2) { moved = true; pushHistory('scrub'); }
+        if (!moved) return;
+        const raw = startVal + dx * step;
+        const v = precision > 0 ? +raw.toFixed(precision) : Math.round(raw);
+        input.value = v;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        if (!moved) { input.focus(); input.select?.(); }
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+  }
+  document.querySelectorAll('.field[data-scrub]').forEach(setupScrub);
+
+  /* --- Input bindings --- */
+  function bindNum(id, key, min, max) {
+    const el = $(id);
+    el.addEventListener('input', () => {
+      let v = +el.value;
+      if (!Number.isFinite(v)) return;
+      if (min != null && v < min) v = min;
+      if (max != null && v > max) v = max;
+      state[key] = v;
+      applyAll();
+    });
+    el.addEventListener('change', () => {
+      pushHistory('input-' + key);
+    });
+  }
+  bindNum('bannerW', 'bannerW', 1);
+  bindNum('bannerH', 'bannerH', 1);
+  bindNum('padding', 'padding', 0);
+  bindNum('cols', 'cols', 1, 64);
+  bindNum('rows', 'rows', 1, 64);
+  bindNum('gridStroke', 'gridStroke', 0, 8);
+
+  $('shape').addEventListener('change', e => {
+    if (state.shape === e.target.value) return;
+    pushHistory('shape');
+    state.shape = e.target.value;
+    applyAll();
+  });
+
+  /* Common divisors of innerW,innerH used by Fit stepper */
+  function commonDivisors(a, b) {
+    a = Math.round(a); b = Math.round(b);
+    const ds = [];
+    const lim = Math.min(a, b);
+    for (let i = 1; i <= lim; i++) {
+      if (a % i === 0 && b % i === 0) ds.push(i);
+    }
+    return ds;
+  }
+  function computeFitStops() {
+    const innerW = state.bannerW - 2 * state.padding;
+    const innerH = state.bannerH - 2 * state.padding;
+    if (innerW <= 0 || innerH <= 0) return [];
+    let cds = commonDivisors(innerW, innerH).filter(cd => cd >= 6).sort((a,b) => b - a);
+    if (cds.length <= 8) return cds;
+    // pick 8 evenly spaced (preserving largest and smallest)
+    const out = [];
+    for (let i = 0; i < 8; i++) {
+      const idx = Math.round(i * (cds.length - 1) / 7);
+      const v = cds[idx];
+      if (out[out.length - 1] !== v) out.push(v);
+    }
+    return out;
+  }
+  const fitStepper = $('fitStepper');
+  function buildFitStepper() {
+    const stops = computeFitStops();
+    const N = stops.length;
+    if (N === 0) { fitStepper.innerHTML = ''; return; }
+    fitStepper.style.gridTemplateColumns = `repeat(${N}, 1fr)`;
+    fitStepper.style.setProperty('--stepper-side', (50 / N) + '%');
+    fitStepper.innerHTML =
+      `<div class="stepper-track"></div><div class="stepper-fill"></div>` +
+      stops.map(s => `<button class="stepper-stop" data-cellsize="${s}" type="button" tabindex="-1"><span class="dot"></span><span>${s}</span></button>`).join('');
+    syncStepperFromState();
+  }
+  function setStepperActive(idx) {
+    const stops = [...fitStepper.querySelectorAll('.stepper-stop')];
+    stops.forEach((s, i) => s.classList.toggle('active', i === idx));
+    const N = stops.length;
+    if (idx < 0 || N <= 1) {
+      fitStepper.style.setProperty('--stepper-fill', '0%');
+      return;
+    }
+    const sidePct = 50 / N;
+    const trackPct = 100 - 2 * sidePct;
+    const fillPct = (idx / (N - 1)) * trackPct;
+    fitStepper.style.setProperty('--stepper-fill', fillPct + '%');
+  }
+  function syncStepperFromState() {
+    const stops = [...fitStepper.querySelectorAll('.stepper-stop')];
+    const cw = (state.bannerW - 2 * state.padding) / state.cols;
+    const ch = (state.bannerH - 2 * state.padding) / state.rows;
+    if (Math.abs(cw - ch) > 0.5) { setStepperActive(-1); return; }
+    const idx = stops.findIndex(s => Math.abs(+s.dataset.cellsize - cw) < 0.5);
+    setStepperActive(idx);
+  }
+  function applyCellSize(size) {
+    const innerW = state.bannerW - 2 * state.padding;
+    const innerH = state.bannerH - 2 * state.padding;
+    if (innerW % size !== 0 || innerH % size !== 0) return;
+    pushHistory('fit');
+    state.cols = innerW / size;
+    state.rows = innerH / size;
+    applyAll();
+  }
+  let stepperLast = null;
+  function applyStepperAt(clientX) {
+    const stops = [...fitStepper.querySelectorAll('.stepper-stop')];
+    if (!stops.length) return;
+    const rect = fitStepper.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const idx = Math.max(0, Math.min(stops.length - 1, Math.round(ratio * (stops.length - 1))));
+    if (stepperLast === idx) return;
+    stepperLast = idx;
+    applyCellSize(+stops[idx].dataset.cellsize);
+    setStepperActive(idx);
+  }
+  fitStepper.addEventListener('mousedown', e => {
+    e.preventDefault();
+    stepperLast = null;
+    applyStepperAt(e.clientX);
+    const move = ev => applyStepperAt(ev.clientX);
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+
+  // Sliders: 'input' for live, mousedown for history snapshot
+  $('boxR').addEventListener('input', e => {
+    state.boxR = +e.target.value;
+    $('boxRVal').textContent = state.boxR;
+    applyAll();
+  });
+  $('boxR').addEventListener('mousedown', () => pushHistory('boxR'));
+  $('neckR').addEventListener('input', e => {
+    state.neckR = +e.target.value;
+    $('neckRVal').textContent = state.neckR;
+    applyAll();
+  });
+  $('neckR').addEventListener('mousedown', () => pushHistory('neckR'));
+
+  /* Accordion */
+  document.querySelectorAll('.section-head').forEach(head => {
+    head.addEventListener('click', () => head.parentElement.classList.toggle('collapsed'));
+  });
+
+  /* --- Resize handle --- */
+  $('resizeHandle').addEventListener('mousedown', e => {
+    e.preventDefault(); e.stopPropagation();
+    pushHistory('resize');
+    const startX = e.clientX, startY = e.clientY;
+    const startW = state.bannerW, startH = state.bannerH;
+    const move = ev => {
+      const z = state.zoom || 1;
+      state.bannerW = Math.max(1, Math.round(startW + (ev.clientX - startX) / z));
+      state.bannerH = Math.max(1, Math.round(startH + (ev.clientY - startY) / z));
+      applyAll();
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+
+  /* --- Color picker popover --- */
+  const picker = $('picker');
+  const pkSV = $('pkSV'), pkSVThumb = $('pkSVThumb');
+  const pkHue = $('pkHue'), pkHueThumb = $('pkHueThumb');
+  const pkAlpha = $('pkAlpha'), pkAlphaThumb = $('pkAlphaThumb');
+  const pkHex = $('pkHex'), pkR = $('pkR'), pkG = $('pkG'), pkB = $('pkB'), pkA = $('pkA');
+  const pkHslH = $('pkHslH'), pkHslS = $('pkHslS'), pkHslL = $('pkHslL');
+  const pkHsbH = $('pkHsbH'), pkHsbS = $('pkHsbS'), pkHsbB = $('pkHsbB');
+  const pkFormat = $('pkFormat');
+
+  // Picker works on a paint object. pkPaint references state[target+'Paint'] for
+  // artboard/box (edited in place), or a temp solid paint for grid (solid-only).
+  // pkHSV holds the HSV of the active stop being edited by SV/hue/alpha controls.
+  const pkState = { target: null, format: 'hex' };
+  let pkPaint = null, pkActive = 0;
+  let pkHSV = { h: 0, s: 1, v: 1, a: 100 };
+  const pkGradBar = $('pkGradBar'), pkAngle = $('pkAngle');
+  const pkDial = $('pkDial'), pkDialBg = $('pkDialBg'), pkDialRot = $('pkDialRot'), pkDialPt = $('pkDialPt');
+
+  const activeStop = () => pkPaint.stops[pkActive];
+  function loadActiveHSV() {
+    const st = activeStop();
+    const [r,g,b] = hexToRgb(st.color);
+    const [h,s,v] = rgbToHsv(r,g,b);
+    pkHSV = { h, s, v, a: st.alpha };
+  }
+  function writeActiveFromHSV() {
+    const [r,g,b] = hsvToRgb(pkHSV.h, pkHSV.s, pkHSV.v);
+    const st = activeStop();
+    st.color = rgbToHex(r,g,b);
+    st.alpha = Math.round(pkHSV.a);
+  }
+
+  function openPicker(target, anchorEl, reuse) {
+    pkState.target = target;
+    if (target === 'grid') {
+      pkPaint = { type: 'solid', angle: 0, stops: [{ color: state.gridColor, alpha: state.gridAlpha, pos: 0 }] };
+    } else {
+      pkPaint = state[target + 'Paint'];
+    }
+    if (!reuse) pkActive = 0;
+    if (pkActive >= pkPaint.stops.length) pkActive = 0;
+    loadActiveHSV();
+    $('pkTitle').textContent = { box: 'Box color', grid: 'Grid color', artboard: 'Artboard color' }[target] || 'Color';
+    $('pkTypes').style.display = (target === 'grid') ? 'none' : '';
+    syncPicker();
+    if (anchorEl) {
+      const rect = anchorEl.getBoundingClientRect();
+      let left = rect.left - (232 + 24);
+      if (left < 8) left = rect.right + 8;
+      let top = rect.top;
+      const maxTop = window.innerHeight - 380;
+      if (top > maxTop) top = maxTop;
+      if (top < 8) top = 8;
+      picker.style.left = left + 'px';
+      picker.style.top = top + 'px';
+    }
+    picker.classList.add('open');
+    clampPicker();
+  }
+  function closePicker() { picker.classList.remove('open'); pkState.target = null; }
+
+  // Reflect the current gradient on the dial: previews the gradient inside the
+  // dial, and positions the indicator (rim handle for linear/angular = angle,
+  // free point for radial = centre cx/cy).
+  function syncDial() {
+    if (!pkPaint || pkPaint.type === 'solid') return;
+    pkDialBg.style.background = paintToCSS(pkPaint);
+    if (pkPaint.type === 'radial') {
+      pkDialPt.style.left = ((pkPaint.cx ?? 0.5) * 100) + '%';
+      pkDialPt.style.top  = ((pkPaint.cy ?? 0.5) * 100) + '%';
+    } else {
+      pkDialRot.style.transform = `rotate(${pkPaint.angle || 0}deg)`;
+    }
+  }
+
+  function renderGradBar() {
+    const list = sortedStops(pkPaint).map(s => `${rgba(s.color, s.alpha)} ${(s.pos*100).toFixed(1)}%`).join(', ');
+    pkGradBar.querySelectorAll('.pk-grad-fill, .pk-grad-stop').forEach(n => n.remove());
+    const fill = document.createElement('div');
+    fill.className = 'pk-grad-fill';
+    fill.style.background = `linear-gradient(90deg, ${list})`;
+    pkGradBar.appendChild(fill);
+    pkPaint.stops.forEach((st, i) => {
+      const h = document.createElement('div');
+      h.className = 'pk-grad-stop' + (i === pkActive ? ' active' : '');
+      h.style.left = (st.pos * 100) + '%';
+      h.style.setProperty('--stop-color', rgba(st.color, st.alpha));
+      h.dataset.idx = i;
+      pkGradBar.appendChild(h);
+    });
+  }
+
+  function syncPicker() {
+    const isGrad = pkPaint.type !== 'solid';
+    picker.classList.toggle('is-gradient', isGrad);
+    picker.classList.toggle('ftype-radial', pkPaint.type === 'radial');
+    document.querySelectorAll('.pk-type-btn').forEach(b => b.classList.toggle('active', b.dataset.ftype === pkPaint.type));
+    if (document.activeElement !== pkAngle) pkAngle.value = Math.round(pkPaint.angle || 0);
+    if (isGrad) { renderGradBar(); syncDial(); }
+
+    picker.style.setProperty('--pk-hue', pkHSV.h);
+    pkSVThumb.style.left = (pkHSV.s * 100) + '%';
+    pkSVThumb.style.top = ((1 - pkHSV.v) * 100) + '%';
+    pkHueThumb.style.left = (pkHSV.h / 360 * 100) + '%';
+    pkAlphaThumb.style.left = pkHSV.a + '%';
+    const [r,g,b] = hsvToRgb(pkHSV.h, pkHSV.s, pkHSV.v);
+    const hex = rgbToHex(r,g,b);
+    picker.style.setProperty('--pk-color', hex);
+    if (document.activeElement !== pkHex) pkHex.value = hex.replace('#','').toUpperCase();
+    if (document.activeElement !== pkR) pkR.value = Math.round(r);
+    if (document.activeElement !== pkG) pkG.value = Math.round(g);
+    if (document.activeElement !== pkB) pkB.value = Math.round(b);
+    const [hh, sl, ll] = rgbToHsl(r, g, b);
+    if (document.activeElement !== pkHslH) pkHslH.value = Math.round(hh);
+    if (document.activeElement !== pkHslS) pkHslS.value = Math.round(sl * 100);
+    if (document.activeElement !== pkHslL) pkHslL.value = Math.round(ll * 100);
+    if (document.activeElement !== pkHsbH) pkHsbH.value = Math.round(pkHSV.h);
+    if (document.activeElement !== pkHsbS) pkHsbS.value = Math.round(pkHSV.s * 100);
+    if (document.activeElement !== pkHsbB) pkHsbB.value = Math.round(pkHSV.v * 100);
+    if (document.activeElement !== pkA) pkA.value = Math.round(pkHSV.a);
+    pkFormat.value = pkState.format;
+    document.querySelectorAll('.pk-format-group').forEach(g => {
+      g.classList.toggle('active', g.classList.contains(pkState.format));
+    });
+  }
+
+  function commitPicker(pushSnap = false) {
+    if (!pkState.target) return;
+    if (pushSnap) pushHistory('color');
+    writeActiveFromHSV();
+    if (pkState.target === 'grid') {
+      state.gridColor = pkPaint.stops[0].color;
+      state.gridAlpha = pkPaint.stops[0].alpha;
+    } else if (pkState.target === 'artboard') {
+      state.style = 'custom';
+    }
+    applyAll();
+  }
+  // Back-compat name used elsewhere
+  const commitPickerToState = commitPicker;
+
+  /* Fill-type buttons */
+  document.querySelectorAll('.pk-type-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const ft = btn.dataset.ftype;
+      if (!pkPaint || pkPaint.type === ft || pkState.target === 'grid') return;
+      pushHistory('ftype');
+      if (ft === 'solid') {
+        const st = activeStop();
+        pkPaint.stops = [{ color: st.color, alpha: st.alpha, pos: 0 }];
+        pkPaint.type = 'solid';
+        pkActive = 0;
+      } else {
+        if (pkPaint.type === 'solid') { pkPaint.stops = solidToStops(pkPaint); pkActive = 0; }
+        pkPaint.type = ft;
+      }
+      loadActiveHSV();
+      syncPicker();
+      commitPicker(false);
+    });
+  });
+
+  /* Angle */
+  pkAngle.addEventListener('input', () => {
+    if (!pkPaint) return;
+    pkPaint.angle = Math.max(0, Math.min(360, +pkAngle.value || 0));
+    syncPicker(); commitPicker(false);
+  });
+  pkAngle.addEventListener('mousedown', () => pushHistory('angle'));
+
+  /* Direction / position dial — linear/angular set angle, radial sets centre */
+  pkDial.addEventListener('mousedown', e => {
+    if (!pkPaint || pkPaint.type === 'solid') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = pkDial.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+    pushHistory(pkPaint.type === 'radial' ? 'radial-pos' : 'angle');
+    const apply = ev => {
+      if (pkPaint.type === 'radial') {
+        pkPaint.cx = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+        pkPaint.cy = Math.max(0, Math.min(1, (ev.clientY - rect.top) / rect.height));
+      } else {
+        // 0° = up, increasing clockwise — matches CSS linear/conic gradient angle.
+        const ang = Math.atan2(ev.clientX - cx, -(ev.clientY - cy)) * 180 / Math.PI;
+        pkPaint.angle = (Math.round(ang) + 360) % 360;
+      }
+      syncPicker(); commitPicker(false);
+    };
+    apply(e);
+    const up = () => {
+      window.removeEventListener('mousemove', apply);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', apply);
+    window.addEventListener('mouseup', up);
+  });
+
+  /* Reverse gradient — mirror every stop position (pos → 1 - pos) */
+  $('pkReverse').addEventListener('click', () => {
+    if (!pkPaint || pkPaint.type === 'solid') return;
+    pushHistory('grad-reverse');
+    pkPaint.stops.forEach(s => s.pos = 1 - s.pos);
+    syncPicker(); commitPicker(false);
+  });
+
+  /* Gradient bar: select/drag stops, click to add, drag-away to delete */
+  pkGradBar.addEventListener('mousedown', e => {
+    if (pkPaint.type === 'solid') return;
+    // Stop bubbling: renderGradBar() rebuilds the bar's children mid-handler,
+    // detaching e.target — the document close-on-outside listener would then
+    // see picker.contains(e.target) === false and wrongly close the picker.
+    e.preventDefault();
+    e.stopPropagation();
+    const barRect = pkGradBar.getBoundingClientRect();
+    const stopEl = e.target.closest('.pk-grad-stop');
+    if (stopEl) {
+      pkActive = +stopEl.dataset.idx;
+      loadActiveHSV();
+      pushHistory('stop-move');
+      const move = ev => {
+        const pos = Math.max(0, Math.min(1, (ev.clientX - barRect.left) / barRect.width));
+        activeStop().pos = pos;
+        syncPicker(); commitPicker(false);
+        // renderGradBar() just rebuilt the handles, so re-grab the active one and
+        // show live drag feedback: lift it to follow the cursor downward and dim
+        // it once it's past the delete threshold (so deletion is discoverable).
+        const dy = ev.clientY - (barRect.top + barRect.height / 2);
+        const handle = pkGradBar.querySelector('.pk-grad-stop.active');
+        if (handle) {
+          const lift = Math.max(0, Math.abs(dy) - barRect.height / 2) * Math.sign(dy || 1);
+          handle.style.transform = `translate(-50%, ${lift}px)`;
+          handle.style.opacity = (Math.abs(dy) > 50 && pkPaint.stops.length > 2) ? 0.35 : 1;
+        }
+      };
+      const up = ev => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        const offY = Math.abs(ev.clientY - (barRect.top + barRect.height / 2));
+        if (offY > 50 && pkPaint.stops.length > 2) {
+          pkPaint.stops.splice(pkActive, 1);
+          pkActive = Math.max(0, pkActive - 1);
+          loadActiveHSV();
+        }
+        syncPicker(); commitPicker(false);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      syncPicker();
+    } else {
+      // Add a stop at click position, colour sampled from current gradient
+      const pos = Math.max(0, Math.min(1, (e.clientX - barRect.left) / barRect.width));
+      pushHistory('stop-add');
+      const ss = sortedStops(pkPaint);
+      let near = ss[0];
+      for (const s of ss) if (Math.abs(s.pos - pos) < Math.abs(near.pos - pos)) near = s;
+      pkPaint.stops.push({ color: near.color, alpha: near.alpha, pos });
+      pkActive = pkPaint.stops.length - 1;
+      loadActiveHSV();
+      syncPicker(); commitPicker(false);
+    }
+  });
+
+  function bindBar(el, onMove, snapKey) {
+    let pushed = false;
+    el.addEventListener('mousedown', e => {
+      e.preventDefault();
+      pushed = false;
+      const handle = ev => {
+        if (!pushed) { pushHistory(snapKey); pushed = true; }
+        const rect = el.getBoundingClientRect();
+        const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
+        const y = Math.max(0, Math.min(rect.height, ev.clientY - rect.top));
+        onMove(x / rect.width, y / rect.height, rect);
+        writeActiveFromHSV();
+        syncPicker();
+        commitPicker(false);
+      };
+      handle(e);
+      const up = () => {
+        window.removeEventListener('mousemove', handle);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', handle);
+      window.addEventListener('mouseup', up);
+    });
+  }
+  bindBar(pkSV, (x, y) => { pkHSV.s = x; pkHSV.v = 1 - y; }, 'sv');
+  bindBar(pkHue, (x) => { pkHSV.h = x * 360; }, 'hue');
+  bindBar(pkAlpha, (x) => { pkHSV.a = x * 100; }, 'alpha');
+
+  pkHex.addEventListener('change', () => {
+    const v = pkHex.value.replace('#','').trim();
+    if (/^[0-9a-fA-F]{6}$/.test(v)) {
+      const [r,g,b] = hexToRgb('#' + v);
+      const [h,s,v2] = rgbToHsv(r,g,b);
+      pkHSV.h = h; pkHSV.s = s; pkHSV.v = v2;
+      writeActiveFromHSV(); syncPicker(); commitPicker(true);
+    } else { syncPicker(); }
+  });
+  function rgbInputChanged() {
+    const r = Math.max(0, Math.min(255, +pkR.value || 0));
+    const g = Math.max(0, Math.min(255, +pkG.value || 0));
+    const b = Math.max(0, Math.min(255, +pkB.value || 0));
+    const [h,s,v] = rgbToHsv(r,g,b);
+    pkHSV.h = h; pkHSV.s = s; pkHSV.v = v;
+    writeActiveFromHSV(); syncPicker(); commitPicker(true);
+  }
+  [pkR, pkG, pkB].forEach(el => el.addEventListener('change', rgbInputChanged));
+  function hslInputChanged() {
+    const h = Math.max(0, Math.min(360, +pkHslH.value || 0));
+    const s = Math.max(0, Math.min(100, +pkHslS.value || 0)) / 100;
+    const l = Math.max(0, Math.min(100, +pkHslL.value || 0)) / 100;
+    const [r,g,b] = hslToRgb(h, s, l);
+    const [h2,s2,v2] = rgbToHsv(r, g, b);
+    pkHSV.h = h2; pkHSV.s = s2; pkHSV.v = v2;
+    writeActiveFromHSV(); syncPicker(); commitPicker(true);
+  }
+  [pkHslH, pkHslS, pkHslL].forEach(el => el.addEventListener('change', hslInputChanged));
+  function hsbInputChanged() {
+    pkHSV.h = Math.max(0, Math.min(360, +pkHsbH.value || 0));
+    pkHSV.s = Math.max(0, Math.min(100, +pkHsbS.value || 0)) / 100;
+    pkHSV.v = Math.max(0, Math.min(100, +pkHsbB.value || 0)) / 100;
+    writeActiveFromHSV(); syncPicker(); commitPicker(true);
+  }
+  [pkHsbH, pkHsbS, pkHsbB].forEach(el => el.addEventListener('change', hsbInputChanged));
+  pkA.addEventListener('change', () => {
+    pkHSV.a = Math.max(0, Math.min(100, +pkA.value || 0));
+    writeActiveFromHSV(); syncPicker(); commitPicker(true);
+  });
+  pkFormat.addEventListener('change', () => {
+    pkState.format = pkFormat.value;
+    syncPicker();
+  });
+
+  $('pkClose').addEventListener('click', closePicker);
+
+  // Keep the picker fully inside the plugin window (used on open + drag).
+  function clampPicker() {
+    const w = picker.offsetWidth, h = picker.offsetHeight;
+    let left = parseFloat(picker.style.left) || 0;
+    let top = parseFloat(picker.style.top) || 0;
+    left = Math.max(4, Math.min(window.innerWidth - w - 4, left));
+    top = Math.max(4, Math.min(window.innerHeight - h - 4, top));
+    picker.style.left = left + 'px';
+    picker.style.top = top + 'px';
+  }
+  // Drag the picker by its header so it can be moved when it doesn't fit.
+  picker.querySelector('.picker-head').addEventListener('mousedown', e => {
+    if (e.target.closest('.picker-close')) return;
+    e.preventDefault();
+    const r = picker.getBoundingClientRect();
+    const offX = e.clientX - r.left, offY = e.clientY - r.top;
+    const move = ev => {
+      picker.style.left = (ev.clientX - offX) + 'px';
+      picker.style.top  = (ev.clientY - offY) + 'px';
+      clampPicker();
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+
+  // Close on outside click
+  document.addEventListener('mousedown', e => {
+    if (!picker.classList.contains('open')) return;
+    if (picker.contains(e.target)) return;
+    // If the target was already detached from the DOM (e.g. a handler rebuilt
+    // its container mid-click), don't treat it as an outside click.
+    if (!e.target.isConnected) return;
+    if (e.target.closest('.color-row')) return;
+    closePicker();
+  });
+
+  // Eyedropper
+  $('pkEye').addEventListener('click', async () => {
+    if (!window.EyeDropper) { toast('EyeDropper not supported'); return; }
+    try {
+      const result = await new EyeDropper().open();
+      const [r,g,b] = hexToRgb(result.sRGBHex);
+      const [h,s,v] = rgbToHsv(r,g,b);
+      pkHSV.h = h; pkHSV.s = s; pkHSV.v = v;
+      writeActiveFromHSV(); syncPicker(); commitPicker(true);
+    } catch (err) {}
+  });
+
+  document.querySelectorAll('.color-row .swatch').forEach(sw => {
+    sw.addEventListener('mousedown', e => {
+      e.preventDefault();
+      const row = sw.closest('.color-row');
+      const target = row.dataset.color;
+      if (picker.classList.contains('open') && pkState.target === target) {
+        closePicker();
+      } else {
+        openPicker(target, sw);
+      }
+    });
+  });
+
+  /* Inline hex + alpha inputs on color rows */
+  function bindColorRowInputs(target) {
+    const hex = $(`${target}HexInput`);
+    const alpha = $(`${target}AlphaInput`);
+    hex.addEventListener('change', () => {
+      const v = hex.value.replace('#','').trim();
+      if (/^[0-9a-fA-F]{6}$/.test(v)) {
+        pushHistory('color');
+        setTargetPrimary(target, '#' + v.toLowerCase(), null);
+        // Editing artboard fill replaces a preset gradient → revert to Custom.
+        if (target === 'artboard') state.style = 'custom';
+        applyAll();
+        reinitPickerIfOpen(target);
+      } else {
+        hex.value = targetPrimary(target).color.replace('#','').toUpperCase();
+      }
+    });
+    alpha.addEventListener('input', () => {
+      let v = +alpha.value;
+      if (!Number.isFinite(v)) return;
+      v = Math.max(0, Math.min(100, v));
+      setTargetPrimary(target, null, v);
+      if (target === 'artboard') state.style = 'custom';
+      applyAll();
+      reinitPickerIfOpen(target);
+    });
+    alpha.addEventListener('change', () => pushHistory('alpha'));
+  }
+  function reinitPickerIfOpen(target) {
+    if (!picker.classList.contains('open') || pkState.target !== target) return;
+    openPicker(target, null, true);
+  }
+  ['artboard', 'grid', 'box'].forEach(bindColorRowInputs);
+
+  function buildSVG(forRaster = false) {
+    const { bannerW, bannerH, padding, cols, rows,
+            artboardColor, artboardAlpha,
+            gridColor, gridAlpha, gridStroke,
+            boxColor, boxAlpha,
+            shape, neckR } = state;
+    const cw = (bannerW - 2 * padding) / cols;
+    const ch = (bannerH - 2 * padding) / rows;
+    const [gr,gg,gb] = hexToRgb(gridColor);
+
+    let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${bannerW}" height="${bannerH}" viewBox="0 0 ${bannerW} ${bannerH}">`;
+    s += `<defs><filter id="goo" x="-10%" y="-10%" width="120%" height="120%">`;
+    s += `<feGaussianBlur in="SourceGraphic" stdDeviation="${Math.max(state.boxR, 0.001)}" result="blur"/>`;
+    s += `<feColorMatrix in="blur" values="${gooMatrixValues(neckR)}" result="shape"/>`;
+    s += `<feFlood flood-color="${boxColor}" flood-opacity="${boxAlpha/100}" result="flood"/>`;
+    s += `<feComposite in="flood" in2="shape" operator="in"/>`;
+    s += `</filter></defs>`;
+    s += `<rect width="${bannerW}" height="${bannerH}" fill="${artboardColor}" fill-opacity="${artboardAlpha/100}"/>`;
+
+    s += `<g stroke="rgb(${gr},${gg},${gb})" stroke-opacity="${gridAlpha/100}" stroke-width="${gridStroke}" shape-rendering="${gridStroke < 1 ? 'geometricPrecision' : 'crispEdges'}">`;
+    for (let c = 0; c <= cols; c++) {
+      const x = padding + c * cw;
+      s += `<line x1="${x}" y1="${padding}" x2="${x}" y2="${padding + rows * ch}"/>`;
+    }
+    for (let r = 0; r <= rows; r++) {
+      const y = padding + r * ch;
+      s += `<line x1="${padding}" y1="${y}" x2="${padding + cols * cw}" y2="${y}"/>`;
+    }
+    s += `</g>`;
+    if (filled.size > 0) {
+      s += `<g filter="url(#goo)">`;
+      for (const key of filled) {
+        const [r, c] = key.split(',').map(Number);
+        s += buildShapeSvg(shape, { x: padding + c*cw, y: padding + r*ch, w: cw, h: ch }, boxColor);
+      }
+      s += `</g>`;
+    }
+    s += `</svg>`;
+    return s;
+  }
+  function download(filename, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function rasterize(scale) {
+    return new Promise((resolve, reject) => {
+      const svg = buildSVG();
+      const blob = new Blob([svg], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = state.bannerW * scale;
+        canvas.height = state.bannerH * scale;
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas);
+      };
+      img.onerror = e => { URL.revokeObjectURL(url); reject(e); };
+      img.src = url;
+    });
+  }
+
+  /* ---- True-vector SVG export ----
+     Bake the goo filter into actual <path> shapes via:
+     1. Render boxes-only SVG with filter to canvas at SS scale
+     2. Threshold the alpha channel
+     3. Marching squares → boundary line segments per 2×2 sample
+     4. Chain segments by shared endpoints into closed loops (one per island)
+     5. Convert each loop to a quadratic-bezier path through midpoints (C1-smooth)
+     6. Emit SVG with #background, #grid and #boxes groups, no <filter> */
+  function buildBoxesOnlyFilterSVG(W, H) {
+    const { bannerW, bannerH, padding, cols, rows, shape, neckR } = state;
+    const cw = (bannerW - 2 * padding) / cols;
+    const ch = (bannerH - 2 * padding) / rows;
+    let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${bannerW} ${bannerH}">`;
+    s += `<defs><filter id="goo" x="-10%" y="-10%" width="120%" height="120%">`;
+    s += `<feGaussianBlur in="SourceGraphic" stdDeviation="${Math.max(state.boxR, 0.001)}" result="blur"/>`;
+    s += `<feColorMatrix in="blur" values="${gooMatrixValues(neckR)}" result="shape"/>`;
+    s += `<feFlood flood-color="#ffffff" flood-opacity="1" result="flood"/>`;
+    s += `<feComposite in="flood" in2="shape" operator="in"/>`;
+    s += `</filter></defs>`;
+    if (filled.size > 0) {
+      s += `<g filter="url(#goo)">`;
+      for (const key of filled) {
+        const [r, c] = key.split(',').map(Number);
+        s += buildShapeSvg(shape, { x: padding + c*cw, y: padding + r*ch, w: cw, h: ch }, '#ffffff');
+      }
+      s += `</g>`;
+    }
+    s += `</svg>`;
+    return s;
+  }
+
+  function rasterizeAlpha(scale) {
+    return new Promise((resolve, reject) => {
+      const W = Math.round(state.bannerW * scale);
+      const H = Math.round(state.bannerH * scale);
+      const svg = buildBoxesOnlyFilterSVG(W, H);
+      const blob = new Blob([svg], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = W; canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, W, H);
+        const imgData = ctx.getImageData(0, 0, W, H);
+        URL.revokeObjectURL(url);
+        resolve({ W, H, data: imgData.data });
+      };
+      img.onerror = e => { URL.revokeObjectURL(url); reject(e); };
+      img.src = url;
+    });
+  }
+
+  function extractContours(data, W, H, threshold = 128) {
+    // Read full alpha array (subpixel-accurate boundary needs raw values)
+    const alpha = new Uint8Array(W * H);
+    for (let i = 0; i < W * H; i++) alpha[i] = data[i * 4 + 3];
+
+    // Linear-interpolated edge-crossing fraction (clamped)
+    const t = (a, b) => {
+      if (a === b) return 0.5;
+      const v = (threshold - a) / (b - a);
+      return v < 0 ? 0 : v > 1 ? 1 : v;
+    };
+
+    const segments = [];
+    for (let y = 0; y < H - 1; y++) {
+      const yo = y * W;
+      const y1o = yo + W;
+      for (let x = 0; x < W - 1; x++) {
+        const aTL = alpha[yo + x], aTR = alpha[yo + x + 1];
+        const aBR = alpha[y1o + x + 1], aBL = alpha[y1o + x];
+        const mask = ((aTL > threshold) ? 1 : 0)
+                   | ((aTR > threshold) ? 2 : 0)
+                   | ((aBR > threshold) ? 4 : 0)
+                   | ((aBL > threshold) ? 8 : 0);
+        if (mask === 0 || mask === 15) continue;
+        // Subpixel edge crossings
+        const T = [x + t(aTL, aTR), y];
+        const R = [x + 1, y + t(aTR, aBR)];
+        const B = [x + t(aBL, aBR), y + 1];
+        const L = [x, y + t(aTL, aBL)];
+        switch (mask) {
+          case 1: case 14: segments.push([L, T]); break;
+          case 2: case 13: segments.push([T, R]); break;
+          case 3: case 12: segments.push([L, R]); break;
+          case 4: case 11: segments.push([R, B]); break;
+          case 5: segments.push([L, T]); segments.push([R, B]); break;
+          case 6: case 9: segments.push([T, B]); break;
+          case 7: case 8: segments.push([L, B]); break;
+          case 10: segments.push([T, R]); segments.push([L, B]); break;
+        }
+      }
+    }
+
+    // Index segments by endpoint
+    const pointMap = new Map();
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const k0 = seg[0][0] + ',' + seg[0][1];
+      const k1 = seg[1][0] + ',' + seg[1][1];
+      (pointMap.get(k0) || pointMap.set(k0, []).get(k0)).push(i);
+      (pointMap.get(k1) || pointMap.set(k1, []).get(k1)).push(i);
+    }
+
+    const used = new Uint8Array(segments.length);
+    const loops = [];
+    for (let start = 0; start < segments.length; start++) {
+      if (used[start]) continue;
+      const loop = [];
+      let curIdx = start;
+      let curPt = segments[start][0];
+      let guard = segments.length + 2;
+      while (curIdx !== -1 && !used[curIdx] && guard-- > 0) {
+        used[curIdx] = 1;
+        const seg = segments[curIdx];
+        const next = (seg[0][0] === curPt[0] && seg[0][1] === curPt[1]) ? seg[1] : seg[0];
+        loop.push(next);
+        const k = next[0] + ',' + next[1];
+        const cands = pointMap.get(k);
+        let nextIdx = -1;
+        if (cands) for (const c of cands) if (!used[c]) { nextIdx = c; break; }
+        curIdx = nextIdx;
+        curPt = next;
+      }
+      if (loop.length >= 3) loops.push(loop);
+    }
+    return loops;
+  }
+
+  function subsampleLoop(loop, factor) {
+    if (factor <= 1 || loop.length <= 8) return loop;
+    const out = [];
+    for (let i = 0; i < loop.length; i += factor) out.push(loop[i]);
+    return out.length >= 4 ? out : loop;
+  }
+
+  // Catmull-Rom spline → cubic Bezier path. Passes through every input point
+  // with C1-continuous tangents derived from neighbors. Result is truly smooth
+  // (no visible polygon edges at any zoom level).
+  function loopToCatmullRomPath(loop, decimals = 2) {
+    const N = loop.length;
+    if (N < 4) return '';
+    const f = n => +n.toFixed(decimals);
+    const pt = i => loop[((i % N) + N) % N];
+    const p0 = pt(0);
+    let s = `M${f(p0[0])} ${f(p0[1])}`;
+    for (let i = 0; i < N; i++) {
+      const a = pt(i - 1), b = pt(i), c = pt(i + 1), d = pt(i + 2);
+      const c1x = b[0] + (c[0] - a[0]) / 6;
+      const c1y = b[1] + (c[1] - a[1]) / 6;
+      const c2x = c[0] - (d[0] - b[0]) / 6;
+      const c2y = c[1] - (d[1] - b[1]) / 6;
+      s += `C${f(c1x)} ${f(c1y)} ${f(c2x)} ${f(c2y)} ${f(c[0])} ${f(c[1])}`;
+    }
+    s += 'Z';
+    return s;
+  }
+
+  async function buildVectorSVG() {
+    const { bannerW, bannerH, padding, cols, rows,
+            artboardColor, artboardAlpha,
+            gridColor, gridAlpha, gridStroke,
+            boxColor, boxAlpha } = state;
+    const cw = (bannerW - 2 * padding) / cols;
+    const ch = (bannerH - 2 * padding) / rows;
+    const [gr, gg, gb] = hexToRgb(gridColor);
+
+    // Higher supersampling → finer alpha gradient → smoother subpixel interp.
+    // Adaptive based on artboard area; capped to keep canvas reads under control.
+    const area = bannerW * bannerH;
+    const ss = area > 2_000_000 ? 1
+             : area > 600_000   ? 2
+             : area > 150_000   ? 3
+             :                    4;
+
+    let boxPaths = '';
+    if (filled.size > 0) {
+      const { W, H, data } = await rasterizeAlpha(ss);
+      const loops = extractContours(data, W, H);
+      if (loops.length > 0) {
+        const subFactor = Math.max(2, Math.round(ss * 3));
+        boxPaths = loops.map(loop => {
+          const scaled = loop.map(p => [p[0] / ss, p[1] / ss]);
+          const sampled = subsampleLoop(scaled, subFactor);
+          return `<path d="${loopToCatmullRomPath(sampled)}"/>`;
+        }).join('');
+      }
+    }
+
+    // Resolve paints to SVG gradient defs + fill refs
+    const abPaint = paintToSVG(state.artboardPaint, 'artboardGrad');
+    const boxP = paintToSVG(state.boxPaint, 'boxGrad');
+    let defs = '';
+    if (abPaint.def) defs += abPaint.def;
+    if (boxPaths && boxP.def) defs += boxP.def;
+
+    let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${bannerW}" height="${bannerH}" viewBox="0 0 ${bannerW} ${bannerH}">`;
+    if (defs) s += `<defs>${defs}</defs>`;
+    s += `<rect id="background" width="${bannerW}" height="${bannerH}" fill="${abPaint.fill}" fill-opacity="${abPaint.opacity}"/>`;
+    s += `<g id="grid" stroke="rgb(${gr},${gg},${gb})" stroke-opacity="${gridAlpha/100}" stroke-width="${gridStroke}" fill="none" shape-rendering="${gridStroke < 1 ? 'geometricPrecision' : 'crispEdges'}">`;
+    for (let c = 0; c <= cols; c++) {
+      const x = padding + c * cw;
+      s += `<line x1="${x}" y1="${padding}" x2="${x}" y2="${padding + rows * ch}"/>`;
+    }
+    for (let r = 0; r <= rows; r++) {
+      const y = padding + r * ch;
+      s += `<line x1="${padding}" y1="${y}" x2="${padding + cols * cw}" y2="${y}"/>`;
+    }
+    s += `</g>`;
+    if (boxPaths) {
+      s += `<g id="boxes" fill="${boxP.fill}" fill-opacity="${boxP.opacity}" fill-rule="evenodd">${boxPaths}</g>`;
+    }
+    s += `</svg>`;
+    return s;
+  }
+
+  /* --- File download + rasterise helpers (web export) --- */
+  function download(filename, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  // Rasterise the baked-vector SVG to a canvas at the given scale.
+  // `bg` (optional) paints a backdrop first — needed for JPG which has no alpha.
+  async function rasterize(scale, bg) {
+    const svg = await buildVectorSVG();
+    return new Promise((resolve, reject) => {
+      const blob = new Blob([svg], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(state.bannerW * scale);
+        canvas.height = Math.round(state.bannerH * scale);
+        const ctx = canvas.getContext('2d');
+        if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas);
+      };
+      img.onerror = e => { URL.revokeObjectURL(url); reject(e); };
+      img.src = url;
+    });
+  }
+
+  /* Reset — clear the painted cells and restore the base screen for the
+     currently selected style (Custom/Blue/…). Geometry (template dims) and
+     brush size are kept; everything is one undo step. */
+  function resetProject() {
+    pushHistory('reset-project');
+    filled.clear();
+    const st = STYLES[state.style] || STYLES.custom;
+    if (st.gradient) {
+      state.artboardPaint = { type: 'linear', angle: 135, stops: [
+        { color: st.gradient[0], alpha: 100, pos: 0 },
+        { color: st.gradient[1], alpha: 100, pos: 1 },
+      ]};
+      state.boxPaint = { type: 'solid', angle: 135, stops: [
+        { color: st.box.color, alpha: st.box.alpha, pos: 0 },
+        { color: st.box.color, alpha: 0, pos: 1 },
+      ]};
+    } else {
+      // Custom = factory defaults (matches the initial `state`).
+      state.artboardPaint = { type: 'solid', angle: 135, stops: [
+        { color: '#2a2a2a', alpha: 100, pos: 0 }, { color: '#000000', alpha: 100, pos: 1 } ]};
+      state.boxPaint = { type: 'solid', angle: 135, stops: [
+        { color: '#ffd400', alpha: 100, pos: 0 }, { color: '#ffffff', alpha: 100, pos: 1 } ]};
+    }
+    state.boxR = 8;
+    state.neckR = 12;
+    state.shape = 'square';
+    syncPaintToLegacy('artboard');
+    syncPaintToLegacy('box');
+    if (picker.classList.contains('open')) closePicker();
+    applyAll();
+    toast('Reset');
+  }
+  $('resetBtn').addEventListener('click', resetProject);
+
+  /* Export format / scale selectors */
+  $('exportFormat').value = state.exportFormat;
+  $('exportScale').value = String(state.exportScale);
+  $('exportLabel').textContent = state.exportFormat.toUpperCase();
+  $('exportFormat').addEventListener('change', e => {
+    state.exportFormat = e.target.value;
+    $('exportLabel').textContent = state.exportFormat.toUpperCase();
+  });
+  $('exportScale').addEventListener('change', e => {
+    state.exportScale = +e.target.value;
+  });
+
+  /* Export to file — true-vector SVG, or rasterised PNG/JPG at the chosen scale. */
+  $('exportBtn').addEventListener('click', async () => {
+    const fmt = state.exportFormat, scale = state.exportScale;
+    try {
+      if (fmt === 'svg') {
+        const svg = await buildVectorSVG();
+        download('grid-blob.svg', new Blob([svg], { type: 'image/svg+xml' }));
+        return;
+      }
+      const canvas = await rasterize(scale, fmt === 'jpg' ? '#ffffff' : null);
+      const mime = fmt === 'jpg' ? 'image/jpeg' : 'image/png';
+      const ext  = fmt === 'jpg' ? 'jpg' : 'png';
+      canvas.toBlob(b => download(`grid-blob@${scale}x.${ext}`, b), mime, fmt === 'jpg' ? 0.92 : undefined);
+    } catch (err) {
+      toast('Export failed');
+    }
+  });
+
+  /* Copy as SVG — write the baked-vector markup to the clipboard. Figma turns
+     pasted SVG text into editable vector layers (Ctrl/Cmd+V on the canvas). */
+  $('copySvgBtn').addEventListener('click', async () => {
+    try {
+      const svg = await buildVectorSVG();
+      await navigator.clipboard.writeText(svg);
+      toast('SVG copied — paste into Figma');
+    } catch (err) {
+      toast('Copy failed');
+    }
+  });
+
+  /* Zoom */
+  function setZoom(z) {
+    z = Math.max(0.05, Math.min(8, z));
+    state.zoom = z;
+    document.documentElement.style.setProperty('--zoom', z);
+    $('zoomLabel').textContent = Math.round(z * 100) + '%';
+    document.querySelectorAll('#zoomDropdown .dropdown-item').forEach(item => {
+      item.classList.toggle('selected', Math.abs(+item.dataset.zoom - z) < 0.001);
+    });
+  }
+  $('zoomIn').addEventListener('click', () => setZoom(state.zoom * 1.25));
+  $('zoomOut').addEventListener('click', () => setZoom(state.zoom / 1.25));
+  document.querySelectorAll('#zoomDropdown .dropdown-item').forEach(item => {
+    item.addEventListener('click', () => {
+      setZoom(+item.dataset.zoom);
+      $('zoomDropdown').classList.remove('open');
+    });
+  });
+  const zoomDd = $('zoomDropdown');
+  zoomDd.querySelector('.dropdown-btn').addEventListener('mousedown', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (zoomDd.classList.contains('open')) zoomDd.classList.remove('open');
+    else {
+      document.querySelectorAll('.dropdown.open').forEach(d => d.classList.remove('open'));
+      zoomDd.classList.add('open');
+    }
+  });
+  document.addEventListener('mousedown', e => {
+    if (!zoomDd.contains(e.target)) zoomDd.classList.remove('open');
+  });
+  $('canvasArea').addEventListener('wheel', e => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    const delta = -e.deltaY * 0.0015;
+    setZoom(state.zoom * (1 + delta));
+  }, { passive: false });
+  state.zoom = 1;
+
+  /* Pan — middle mouse button drag OR hold H + left drag */
+  state.panX = 0;
+  state.panY = 0;
+  function applyPan() {
+    document.documentElement.style.setProperty('--pan-x', state.panX + 'px');
+    document.documentElement.style.setProperty('--pan-y', state.panY + 'px');
+  }
+  applyPan();
+  let panning = false;
+  let panStart = null;
+  let hKeyDown = false;
+  const canvasAreaEl = $('canvasArea');
+  function startPan(e) {
+    panning = true;
+    panStart = { x: e.clientX, y: e.clientY, panX: state.panX, panY: state.panY };
+    canvasAreaEl.classList.add('panning');
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  canvasAreaEl.addEventListener('mousedown', e => {
+    if (e.button === 1 || (e.button === 0 && hKeyDown)) startPan(e);
+  }, true);
+  window.addEventListener('mousemove', e => {
+    if (!panning) return;
+    state.panX = panStart.panX + (e.clientX - panStart.x);
+    state.panY = panStart.panY + (e.clientY - panStart.y);
+    applyPan();
+  });
+  window.addEventListener('mouseup', () => {
+    if (panning) { panning = false; canvasAreaEl.classList.remove('panning'); }
+  });
+  // Prevent the middle-click auto-scroll wheel cursor
+  canvasAreaEl.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
+  window.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey) return;
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (e.key === 'h' || e.key === 'H' || e.code === 'Space') {
+      e.preventDefault();
+      if (!hKeyDown) { hKeyDown = true; canvasAreaEl.classList.add('h-mode'); }
+    }
+  });
+  window.addEventListener('keyup', e => {
+    if (e.key === 'h' || e.key === 'H' || e.code === 'Space') {
+      hKeyDown = false;
+      canvasAreaEl.classList.remove('h-mode');
+    }
+  });
+
+  /* Custom dropdown — replaces native <select> visuals */
+  function enhanceSelect(sel) {
+    if (sel.dataset.enhanced) return;
+    sel.dataset.enhanced = '1';
+
+    const dd = document.createElement('div');
+    dd.className = 'dropdown';
+
+    const btn = document.createElement('button');
+    btn.className = 'dropdown-btn';
+    btn.type = 'button';
+    btn.tabIndex = -1;
+    btn.innerHTML = `<span class="dropdown-label"></span><span class="dropdown-caret">▾</span>`;
+
+    const menu = document.createElement('div');
+    menu.className = 'dropdown-menu';
+
+    [...sel.options].forEach(opt => {
+      const item = document.createElement('button');
+      item.className = 'dropdown-item';
+      item.type = 'button';
+      item.dataset.value = opt.value;
+      item.innerHTML = `<span class="dropdown-check">✓</span><span>${opt.textContent}</span>`;
+      item.addEventListener('click', () => {
+        if (sel.value !== opt.value) {
+          sel.value = opt.value;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        sync();
+        close();
+      });
+      menu.appendChild(item);
+    });
+
+    dd.appendChild(btn);
+    dd.appendChild(menu);
+    sel.parentNode.insertBefore(dd, sel);
+
+    function sync() {
+      const opt = sel.options[sel.selectedIndex];
+      btn.querySelector('.dropdown-label').textContent = opt ? opt.textContent : '';
+      [...menu.children].forEach(item => {
+        item.classList.toggle('selected', item.dataset.value === sel.value);
+      });
+    }
+    function open() {
+      document.querySelectorAll('.dropdown.open').forEach(d => { if (d !== dd) d.classList.remove('open'); });
+      dd.classList.add('open');
+    }
+    function close() {
+      dd.classList.remove('open');
+    }
+
+    btn.addEventListener('mousedown', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (dd.classList.contains('open')) close(); else open();
+    });
+
+    document.addEventListener('mousedown', e => {
+      if (!dd.contains(e.target)) close();
+    });
+
+    sel.addEventListener('change', sync);
+    sync();
+  }
+  document.querySelectorAll('select').forEach(enhanceSelect);
+
+  /* Shift + Arrow Up/Down → step by 10 (plain arrows keep native ±1) */
+  document.querySelectorAll('input[type="number"]').forEach(input => {
+    input.addEventListener('keydown', e => {
+      if (!e.shiftKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+      e.preventDefault();
+      const cur = +input.value || 0;
+      let next = cur + (e.key === 'ArrowUp' ? 10 : -10);
+      if (input.min !== '' && next < +input.min) next = +input.min;
+      if (input.max !== '' && next > +input.max) next = +input.max;
+      input.value = next;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+
+  /* Style presets — gradient backgrounds + box appearance.
+     Structure leaves room for future user-saved presets (e.g. from localStorage). */
+  const STYLES = {
+    custom: { name: 'Custom', gradient: null, box: null },
+    blue:   { name: 'Blue',   gradient: ['#1470BD', '#49B8EC'], box: { color: '#ffffff', alpha: 40 } },
+    purple: { name: 'Purple', gradient: ['#6C22C9', '#B95CFF'], box: { color: '#ffffff', alpha: 40 } },
+    silver: { name: 'Silver', gradient: ['#59636A', '#A5ADB2'], box: { color: '#ffffff', alpha: 40 } },
+    white:  { name: 'White',  gradient: ['#A4AFB6', '#F3F5F7'], box: { color: '#ffffff', alpha: 40 } },
+  };
+  function applyStyle(name) {
+    const s = STYLES[name];
+    if (!s) return;
+    pushHistory('style');
+    state.style = name;
+    if (s.gradient) {
+      // Preset → artboard linear gradient (135°) + box white-40% solid
+      state.artboardPaint = { type: 'linear', angle: 135, stops: [
+        { color: s.gradient[0], alpha: 100, pos: 0 },
+        { color: s.gradient[1], alpha: 100, pos: 1 },
+      ]};
+      if (s.box) state.boxPaint = { type: 'solid', angle: 135, stops: [
+        { color: s.box.color, alpha: s.box.alpha, pos: 0 },
+        { color: s.box.color, alpha: 0, pos: 1 },
+      ]};
+    }
+    applyAll();
+  }
+  function updateStyleLabel() {
+    const s = STYLES[state.style] || STYLES.custom;
+    $('styleLabel').textContent = s.name;
+    const sw = $('styleSwatchActive');
+    if (s.gradient) {
+      sw.style.background = `linear-gradient(135deg, ${s.gradient[0]}, ${s.gradient[1]})`;
+      sw.classList.remove('custom');
+    } else {
+      sw.removeAttribute('style');
+      sw.classList.add('custom');
+    }
+    document.querySelectorAll('#styleDropdown .dropdown-item').forEach(item => {
+      item.classList.toggle('selected', item.dataset.style === state.style);
+    });
+  }
+  const styleDd = $('styleDropdown');
+  styleDd.querySelector('.dropdown-btn').addEventListener('mousedown', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (styleDd.classList.contains('open')) styleDd.classList.remove('open');
+    else {
+      document.querySelectorAll('.dropdown.open').forEach(d => d.classList.remove('open'));
+      styleDd.classList.add('open');
+    }
+  });
+  document.addEventListener('mousedown', e => {
+    if (!styleDd.contains(e.target)) styleDd.classList.remove('open');
+  });
+  document.querySelectorAll('#styleDropdown .dropdown-item').forEach(item => {
+    item.addEventListener('click', () => {
+      applyStyle(item.dataset.style);
+      styleDd.classList.remove('open');
+    });
+  });
+
+  /* Templates — left control mirroring zoom on right */
+  const TEMPLATES = {
+    slider:   { name: 'Slider banner',   w: 800, h: 400, padding: 40, cols: 18, rows: 8 },
+    category: { name: 'Category banner', w: 299, h: 440, padding: 32, cols: 10, rows: 16 },
+    custom:   { name: 'Custom',          w: 800, h: 600, padding: 40, cols: 18, rows: 13 },
+  };
+  function detectTemplate() {
+    for (const [name, t] of Object.entries(TEMPLATES)) {
+      if (name === 'custom') continue;
+      if (state.bannerW === t.w && state.bannerH === t.h
+          && state.padding === t.padding
+          && state.cols === t.cols && state.rows === t.rows) return name;
+    }
+    return 'custom';
+  }
+  function updateTemplateLabel() {
+    const cur = detectTemplate();
+    $('templateLabel').textContent = TEMPLATES[cur].name;
+    document.querySelectorAll('#templateDropdown .dropdown-item').forEach(item => {
+      item.classList.toggle('selected', item.dataset.template === cur);
+    });
+  }
+  function applyTemplate(name) {
+    const t = TEMPLATES[name];
+    if (!t) return;
+    pushHistory('template');
+    state.bannerW = t.w;
+    state.bannerH = t.h;
+    state.padding = t.padding;
+    state.cols = t.cols;
+    state.rows = t.rows;
+    applyAll();
+  }
+  const templateDd = $('templateDropdown');
+  templateDd.querySelector('.dropdown-btn').addEventListener('mousedown', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (templateDd.classList.contains('open')) templateDd.classList.remove('open');
+    else {
+      document.querySelectorAll('.dropdown.open').forEach(d => d.classList.remove('open'));
+      templateDd.classList.add('open');
+    }
+  });
+  document.addEventListener('mousedown', e => {
+    if (!templateDd.contains(e.target)) templateDd.classList.remove('open');
+  });
+  document.querySelectorAll('#templateDropdown .dropdown-item').forEach(item => {
+    item.addEventListener('click', () => {
+      applyTemplate(item.dataset.template);
+      templateDd.classList.remove('open');
+    });
+  });
+
+  // Hook into applyAll so template/style labels + brush preview auto-update
+  const _origApplyAll = applyAll;
+  applyAll = function() {
+    _origApplyAll();
+    updateTemplateLabel();
+    updateStyleLabel();
+    updateBrushPreview();
+  };
+
+  applyAll();
+</script>
+</body>
+</html>
