@@ -1299,7 +1299,7 @@
             </select>
             <span class="caret">▾</span>
           </div>
-          <button class="grid-reset-btn" id="gridResetBtn" type="button" title="Reset grid (type, angle, stroke)">
+          <button class="grid-reset-btn" id="gridResetBtn" type="button" title="Reset grid & box values to defaults (keeps the current grid type)">
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4.5A4 4 0 1 0 10 7"/><path d="M9.5 1.8v2.7H6.8"/></svg>
           </button>
         </div>
@@ -2290,9 +2290,10 @@
   });
   $('gridResetBtn').addEventListener('click', () => {
     pushHistory('grid-reset');
-    state.gridType = 'classic';
+    // Reset grid & box values to defaults — but stay on the current grid type.
+    state.cols = 18; state.rows = 8; state.gridStroke = 0.5;
+    state.boxR = 8; state.neckR = 12; state.shape = 'square';
     state.colAngle = 45; state.rowAngle = 45; state.angleLinked = true;
-    state.gridStroke = 0.5;
     applyAll();
     toast('Grid reset');
   });
