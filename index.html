@@ -1963,11 +1963,58 @@
     return diagLineSegments().map(([x1, y1, x2, y2]) =>
       `<line x1="${(padding + x1).toFixed(2)}" y1="${(padding + y1).toFixed(2)}" x2="${(padding + x2).toFixed(2)}" y2="${(padding + y2).toFixed(2)}"/>`).join('');
   }
-  // Polygon points (artboard coords) for a painted piece. Stage 1: keys are still
-  // whole cells "r,c" → rect corners (piece geometry added with piece-painting).
+  // --- Diagonal piece geometry: a paint unit is cell(r,c) clipped to band b
+  // (the strip between two consecutive 45° lines x+y = off + k·spacing). ---
+  function clipHalfPlane(poly, cval, sign) {
+    const out = [], N = poly.length;
+    for (let i = 0; i < N; i++) {
+      const a = poly[i], b = poly[(i + 1) % N];
+      const va = a[0] + a[1] - cval, vb = b[0] + b[1] - cval;
+      const ina = sign * va >= -1e-9, inb = sign * vb >= -1e-9;
+      if (ina) out.push(a);
+      if (ina !== inb) { const t = va / (va - vb); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); }
+    }
+    return out;
+  }
+  // Corners (inner-area coords) of the piece.
+  function pieceCorners(r, c, b) {
+    const cw = cellW(), ch = cellH();
+    const s = Math.max(8, state.diagSpacing);
+    const off = ((state.diagOffset % s) + s) % s;
+    const lo = off + b * s, hi = off + (b + 1) * s;
+    let poly = [[c * cw, r * ch], [(c + 1) * cw, r * ch], [(c + 1) * cw, (r + 1) * ch], [c * cw, (r + 1) * ch]];
+    poly = clipHalfPlane(poly, lo, +1);                 // keep x+y >= lo
+    if (poly.length) poly = clipHalfPlane(poly, hi, -1); // keep x+y <= hi
+    return poly;
+  }
+  // Which (cell,band) piece sits at inner-area point (px,py).
+  function pieceAt(px, py) {
+    const cw = cellW(), ch = cellH();
+    const s = Math.max(8, state.diagSpacing);
+    const off = ((state.diagOffset % s) + s) % s;
+    const c = Math.floor(px / cw), r = Math.floor(py / ch);
+    const b = Math.floor((px + py - off) / s);
+    return { r, c, b, key: r + ',' + c + ',' + b };
+  }
+  // clip-path polygon() string for a piece, relative to the cell box at (c·cw, r·ch).
+  function pieceClipPath(r, c, pts) {
+    const cw = cellW(), ch = cellH();
+    return 'polygon(' + pts.map(p => `${(p[0] - c * cw).toFixed(2)}px ${(p[1] - r * ch).toFixed(2)}px`).join(', ') + ')';
+  }
+  // Cursor → inner-area coords (account for zoom on the artboard wrap).
+  function innerCoords(e) {
+    const rect = stage.getBoundingClientRect();
+    const z = state.zoom || 1;
+    return [(e.clientX - rect.left) / z, (e.clientY - rect.top) / z];
+  }
+  // Polygon points (artboard coords) for a painted key — used by export.
   function diagPiecePoints(key) {
     const cw = cellW(), ch = cellH();
-    const [r, c] = key.split(',').map(Number);
+    const parts = key.split(',').map(Number);
+    if (parts.length >= 3) {
+      return pieceCorners(parts[0], parts[1], parts[2]).map(p => [p[0] + state.padding, p[1] + state.padding]);
+    }
+    const [r, c] = parts;
     const x = state.padding + c * cw, y = state.padding + r * ch;
     return [[x, y], [x + cw, y], [x + cw, y + ch], [x, y + ch]];
   }
@@ -1991,15 +2038,22 @@
     const boxGradient = state.boxPaint.type !== 'solid';
     document.body.setAttribute('data-box-grad', boxGradient ? '1' : '0');
 
+    const diagonal = state.gridType === 'diagonal';
     blobs.innerHTML = '';
     for (const key of filled) {
-      const [r, c] = key.split(',').map(Number);
+      const parts = key.split(',').map(Number);
+      const r = parts[0], c = parts[1];
       const blob = document.createElement('div');
       blob.className = 'blob';
       blob.style.left = (c * cw) + 'px';
       blob.style.top = (r * ch) + 'px';
       blob.style.width = cw + 'px';
       blob.style.height = ch + 'px';
+      if (diagonal && parts.length >= 3) {
+        const pts = pieceCorners(r, c, parts[2]);
+        if (pts.length < 3) continue;
+        blob.style.clipPath = pieceClipPath(r, c, pts);
+      }
       blobs.appendChild(blob);
     }
 
@@ -2016,10 +2070,17 @@
     svg.setAttribute('width', innerW);
     svg.setAttribute('height', innerH);
     if (filled.size === 0) { svg.innerHTML = ''; return; }
+    const diagonal = state.gridType === 'diagonal';
     let cells = '';
     for (const key of filled) {
-      const [r, c] = key.split(',').map(Number);
-      cells += `<rect x="${c * cw}" y="${r * ch}" width="${cw}" height="${ch}" fill="#fff"/>`;
+      const parts = key.split(',').map(Number);
+      if (diagonal && parts.length >= 3) {
+        const pts = pieceCorners(parts[0], parts[1], parts[2]);
+        if (pts.length >= 3) cells += `<polygon points="${pts.map(p => p[0].toFixed(2) + ',' + p[1].toFixed(2)).join(' ')}" fill="#fff"/>`;
+      } else {
+        const [r, c] = parts;
+        cells += `<rect x="${c * cw}" y="${r * ch}" width="${cw}" height="${ch}" fill="#fff"/>`;
+      }
     }
     // In diagonal mode the lattice (and its filled cells) extends past the inner
     // rect; widen the gradient-filled rect to cover it (the layer is rotated +
@@ -2225,9 +2286,20 @@
     if (dirty) render();
   }
 
+  // Diagonal: paint a single piece (cell∩band) under the cursor.
+  function applyPaintPiece(pc) {
+    if (pc.r < 0 || pc.r >= state.rows || pc.c < 0 || pc.c >= state.cols) return;
+    let dirty = false;
+    if (paintMode === 'paint') { if (!filled.has(pc.key)) { filled.add(pc.key); dirty = true; } }
+    else { if (filled.has(pc.key)) { filled.delete(pc.key); dirty = true; } }
+    if (dirty) render();
+  }
+
   const brushPreview = $('brushPreview');
   let lastHoverCell = null;
+  let hoverPiece = null;
   function updateBrushPreview() {
+    brushPreview.style.clipPath = '';
     if (!lastHoverCell) { brushPreview.classList.remove('show'); return; }
     const { r: r0, c: c0, n } = brushOrigin(lastHoverCell);
     const cw = cellW(), ch = cellH();
@@ -2237,14 +2309,39 @@
     brushPreview.style.height = (ch * n) + 'px';
     brushPreview.classList.add('show');
   }
+  // Diagonal hover: outline the exact piece that will be painted.
+  function updateDiagPreview() {
+    if (!hoverPiece) { brushPreview.classList.remove('show'); brushPreview.style.clipPath = ''; return; }
+    const { r, c, b } = hoverPiece;
+    const cw = cellW(), ch = cellH();
+    const pts = pieceCorners(r, c, b);
+    if (pts.length < 3) { brushPreview.classList.remove('show'); return; }
+    brushPreview.style.left = (c * cw) + 'px';
+    brushPreview.style.top  = (r * ch) + 'px';
+    brushPreview.style.width  = cw + 'px';
+    brushPreview.style.height = ch + 'px';
+    brushPreview.style.clipPath = pieceClipPath(r, c, pts);
+    brushPreview.classList.add('show');
+  }
 
   grid.addEventListener('contextmenu', e => {
     if (cellFromTarget(e.target)) e.preventDefault();
   });
   grid.addEventListener('mousedown', e => {
+    if (e.button !== 0 && e.button !== 2) return;
+    if (state.gridType === 'diagonal') {
+      const [px, py] = innerCoords(e);
+      const c = Math.floor(px / cellW()), r = Math.floor(py / cellH());
+      if (r < 0 || r >= state.rows || c < 0 || c >= state.cols) return;
+      e.preventDefault();
+      pushHistory('paint');
+      painting = true;
+      paintMode = e.button === 2 ? 'erase' : 'paint';
+      applyPaintPiece(pieceAt(px, py));
+      return;
+    }
     const cell = cellFromTarget(e.target);
     if (!cell) return;
-    if (e.button !== 0 && e.button !== 2) return;
     e.preventDefault();
     pushHistory('paint');
     painting = true;
@@ -2252,12 +2349,24 @@
     applyPaint(cell);
   });
   grid.addEventListener('mouseover', e => {
+    if (state.gridType === 'diagonal') return; // diagonal tracks pieces via mousemove
     const cell = cellFromTarget(e.target);
     if (cell) { lastHoverCell = cell; updateBrushPreview(); }
     if (painting && cell) applyPaint(cell);
   });
+  // Diagonal: track the piece under the cursor (finer than per-cell mouseover).
+  grid.addEventListener('mousemove', e => {
+    if (state.gridType !== 'diagonal') return;
+    const [px, py] = innerCoords(e);
+    const c = Math.floor(px / cellW()), r = Math.floor(py / cellH());
+    if (r < 0 || r >= state.rows || c < 0 || c >= state.cols) { hoverPiece = null; updateDiagPreview(); return; }
+    hoverPiece = pieceAt(px, py);
+    updateDiagPreview();
+    if (painting) applyPaintPiece(hoverPiece);
+  });
   grid.addEventListener('mouseleave', () => {
     lastHoverCell = null;
+    hoverPiece = null;
     brushPreview.classList.remove('show');
   });
   window.addEventListener('mouseup', () => { painting = false; paintMode = null; });
@@ -2337,6 +2446,9 @@
   $('gridType').addEventListener('change', e => {
     if (state.gridType === e.target.value) return;
     pushHistory('gridType');
+    // Diagonal uses piece keys "r,c,b"; classic/perspective use "r,c". Clear the
+    // painting when crossing into/out of diagonal so key formats don't mix.
+    if (state.gridType === 'diagonal' || e.target.value === 'diagonal') filled.clear();
     state.gridType = e.target.value;
     applyAll();
   });
