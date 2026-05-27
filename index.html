@@ -542,8 +542,8 @@
   }
   .field.select-field {
     cursor: pointer;
-    padding-right: 4px;
   }
+  .field.select-field .dropdown-caret { font-size: 12px; }
   .field select {
     flex: 1;
     background: transparent;
@@ -670,10 +670,13 @@
   select[data-enhanced] { display: none; }
   .field.select-field {
     padding: 0;
-    background: transparent !important;
-    cursor: default;
-    box-shadow: none !important;
+    cursor: pointer;
+    border-radius: 5px;
+    background: var(--workspace);
+    box-shadow: inset 0 0 0 1px var(--divider);
+    transition: background 120ms, box-shadow 120ms;
   }
+  .field.select-field:hover { background: var(--hover); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18); }
   .field.select-field > .caret { display: none; }
   .pk-format-dropdown::after { display: none; }
 
