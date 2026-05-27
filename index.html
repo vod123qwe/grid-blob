@@ -143,7 +143,7 @@
   .topo-handle {
     position: absolute; width: 13px; height: 13px;
     border-radius: 50%; border: 2px solid #fff; background: var(--accent);
-    transform: translate(-50%, -50%); cursor: ns-resize; pointer-events: auto;
+    transform: translate(-50%, -50%); cursor: move; pointer-events: auto;
     box-shadow: 0 1px 5px rgba(0,0,0,0.5);
   }
   .topo-handle.down { background: #ff5c7a; }
@@ -1449,7 +1449,7 @@
             <button class="topo-btn" id="topoRandom" type="button">Randomize</button>
             <button class="topo-btn" id="topoFlatten" type="button">Flatten</button>
           </div>
-          <div class="info">Drag the dots on the canvas to sculpt elevation</div>
+          <div class="info">Drag to move · Shift-drag to raise/lower · double-click to add · right-click to remove</div>
         </div>
         <div class="row">
           <div class="field" data-scrub="gridStroke" data-step="0.1" style="flex:1">
@@ -2272,12 +2272,60 @@
       d.className = 'topo-handle' + (p.h > 0.05 ? '' : p.h < -0.05 ? ' down' : ' flat');
       d.style.left = hx + 'px'; d.style.top = hy + 'px';
       d.dataset.idx = idx;
-      d.title = 'Drag up/down to sculpt';
+      d.title = 'Drag to move · Shift-drag to raise/lower · right-click to remove';
       hl.appendChild(d);
     });
     if (!topoHandlesBound) { bindTopoHandles(hl); topoHandlesBound = true; }
   }
+  // Jacobian of topoProjectFitted at (u,v) — used to invert the projection so a
+  // dot can be dragged across the warped surface and follow the cursor.
+  function topoJacobian(u, v) {
+    const e = 0.001;
+    const p0 = topoProjectFitted(u, v);
+    const pu = topoProjectFitted(u + e, v);
+    const pv = topoProjectFitted(u, v + e);
+    const a = (pu[0] - p0[0]) / e, b = (pv[0] - p0[0]) / e;
+    const c = (pu[1] - p0[1]) / e, d = (pv[1] - p0[1]) / e;
+    return { a, b, c, d, det: a * d - b * c };
+  }
+  // Inner-area screen point → plane (u,v) via Newton iteration (seeded near u0,v0).
+  function topoInverse(sx, sy, u0, v0) {
+    let u = (u0 == null ? 0.5 : u0), v = (v0 == null ? 0.5 : v0);
+    for (let it = 0; it < 16; it++) {
+      const p = topoProjectFitted(u, v);
+      const dx = sx - p[0], dy = sy - p[1];
+      if (dx * dx + dy * dy < 0.02) break;
+      const J = topoJacobian(u, v);
+      if (Math.abs(J.det) < 1e-6) break;
+      u += (J.d * dx - J.b * dy) / J.det;
+      v += (-J.c * dx + J.a * dy) / J.det;
+      u = Math.max(-0.3, Math.min(1.3, u));
+      v = Math.max(-0.3, Math.min(1.3, v));
+    }
+    return [u, v];
+  }
+  function removeTopoPoint(idx) {
+    if (!state.topoPoints || state.topoPoints.length <= 1) { toast('Keep at least one point'); return; }
+    pushHistory('topo-remove');
+    state.topoPoints.splice(idx, 1);
+    renderTopo();
+    toast('Point removed');
+  }
+  function addTopoPoint(sx, sy) {
+    const [u, v] = topoInverse(sx, sy);
+    pushHistory('topo-add');
+    state.topoPoints.push({ x: Math.max(0, Math.min(1, u)), y: Math.max(0, Math.min(1, v)), h: 0.7 });
+    renderTopo();
+    toast('Point added');
+  }
   function bindTopoHandles(hl) {
+    // Remove a dot: right-click (keep ≥1).
+    hl.addEventListener('contextmenu', e => {
+      const h = e.target.closest('.topo-handle');
+      if (!h) return;
+      e.preventDefault();
+      removeTopoPoint(+h.dataset.idx);
+    });
     hl.addEventListener('mousedown', e => {
       const h = e.target.closest('.topo-handle');
       if (!h) return;
@@ -2285,12 +2333,22 @@
       const idx = +h.dataset.idx;
       const pt = state.topoPoints[idx];
       if (!pt) return;
-      pushHistory('topo-sculpt');
-      const startY = e.clientY, startH = pt.h, z = state.zoom || 1;
+      if (e.altKey) { removeTopoPoint(idx); return; }   // Alt-click also removes
+      const elevate = e.shiftKey;                        // Shift-drag = raise/lower
+      pushHistory(elevate ? 'topo-sculpt' : 'topo-move');
+      const z = state.zoom || 1;
+      const startY = e.clientY, startH = pt.h;
       const innerH = state.bannerH - 2 * state.padding;
       const move = ev => {
-        const dy = (ev.clientY - startY) / z;
-        pt.h = Math.max(-1.5, Math.min(1.5, startH - dy / (innerH * 0.45)));
+        if (elevate) {
+          const dy = (ev.clientY - startY) / z;
+          pt.h = Math.max(-1.5, Math.min(1.5, startH - dy / (innerH * 0.45)));
+        } else {
+          const [cx, cy] = innerCoords(ev);
+          const [u, v] = topoInverse(cx, cy, pt.x, pt.y);
+          pt.x = Math.max(-0.15, Math.min(1.15, u));
+          pt.y = Math.max(-0.15, Math.min(1.15, v));
+        }
         renderTopo();
       };
       const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
@@ -2664,6 +2722,13 @@
     brushPreview.classList.remove('show');
   });
   window.addEventListener('mouseup', () => { painting = false; paintMode = null; });
+  // Topo: double-click empty canvas to add a control point.
+  stage.addEventListener('dblclick', e => {
+    if (state.gridType !== 'topo') return;
+    if (e.target.closest('.topo-handle')) return;
+    const [sx, sy] = innerCoords(e);
+    addTopoPoint(sx, sy);
+  });
 
   // Brush size slider — also updates live preview if cursor over grid
   $('brushSize').addEventListener('input', e => {
