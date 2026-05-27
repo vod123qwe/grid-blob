@@ -3162,9 +3162,12 @@
       if (loops.length > 0) {
         boxPaths = loops.map(loop => {
           const scaled = loop.map(p => [p[0] / ss, p[1] / ss]);  // raster → artboard px
-          const smooth = smoothClosed(scaled, 2);                // remove stair-stepping
-          const even = resampleClosed(smooth, 2.5);              // evenly-spaced control points (~2.5px)
-          return `<path d="${loopToCatmullRomPath(even)}"/>`;
+          // Smooth → even-resample → smooth again. Export fidelity (not preview)
+          // is what matters here, so we favour soft, flowing curves.
+          const pre = smoothClosed(scaled, 3);                   // remove stair-stepping
+          const even = resampleClosed(pre, 3);                   // evenly-spaced control points (~3px)
+          const soft = smoothClosed(even, 1);                    // final polish on even points
+          return `<path d="${loopToCatmullRomPath(soft)}"/>`;
         }).join('');
       }
     }
