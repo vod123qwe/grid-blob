@@ -2298,15 +2298,31 @@
   const brushPreview = $('brushPreview');
   let lastHoverCell = null;
   let hoverPiece = null;
+  // Apply the perspective matrix to the preview around the inner-area centre so it
+  // sits on the transformed cell (the grid layer is matrix-transformed; the preview
+  // is a sibling, so it must mirror that transform). Identity otherwise.
+  function applyPreviewTransform(left, top) {
+    if (state.gridType === 'perspective') {
+      const innerW = state.bannerW - 2 * state.padding, innerH = state.bannerH - 2 * state.padding;
+      const { a, b, c, d } = gridMatrix();
+      brushPreview.style.transformOrigin = `${(innerW / 2 - left).toFixed(2)}px ${(innerH / 2 - top).toFixed(2)}px`;
+      brushPreview.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, 0, 0)`;
+    } else {
+      brushPreview.style.transform = '';
+      brushPreview.style.transformOrigin = '';
+    }
+  }
   function updateBrushPreview() {
     brushPreview.style.clipPath = '';
     if (!lastHoverCell) { brushPreview.classList.remove('show'); return; }
     const { r: r0, c: c0, n } = brushOrigin(lastHoverCell);
     const cw = cellW(), ch = cellH();
-    brushPreview.style.left = (c0 * cw) + 'px';
-    brushPreview.style.top  = (r0 * ch) + 'px';
+    const left = c0 * cw, top = r0 * ch;
+    brushPreview.style.left = left + 'px';
+    brushPreview.style.top  = top + 'px';
     brushPreview.style.width  = (cw * n) + 'px';
     brushPreview.style.height = (ch * n) + 'px';
+    applyPreviewTransform(left, top);
     brushPreview.classList.add('show');
   }
   // Diagonal hover: outline the exact piece that will be painted.
@@ -2316,6 +2332,7 @@
     const cw = cellW(), ch = cellH();
     const pts = pieceCorners(r, c, b);
     if (pts.length < 3) { brushPreview.classList.remove('show'); return; }
+    brushPreview.style.transform = ''; brushPreview.style.transformOrigin = '';
     brushPreview.style.left = (c * cw) + 'px';
     brushPreview.style.top  = (r * ch) + 'px';
     brushPreview.style.width  = cw + 'px';
