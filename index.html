@@ -1655,9 +1655,9 @@
 </div>
 
 <!-- Floating Reset (bottom-left) -->
-<button class="reset-fab" id="resetBtn" type="button" title="Clear the canvas and restore the selected style's base screen">
-  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4.5A4 4 0 1 0 10 7"/><path d="M9.5 1.8v2.7H6.8"/></svg>
-  Reset
+<button class="reset-fab" id="resetBtn" type="button" title="Clear the painted boxes">
+  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4h7M5 4V3a1 1 0 0 1 1-1h0a1 1 0 0 1 1 1v1M3.3 4l.4 5.2a1 1 0 0 0 1 .8h2.6a1 1 0 0 0 1-.8L8.7 4"/></svg>
+  Clear
 </button>
 
 <div class="toast" id="toast"></div>
@@ -3481,36 +3481,16 @@
   /* Reset — clear the painted cells and restore the base screen for the
      currently selected style (Custom/Blue/…). Geometry (template dims) and
      brush size are kept; everything is one undo step. */
-  function resetProject() {
-    pushHistory('reset-project');
+  // Clear only the painted boxes. Colours, shape, rounding, style and grid stay —
+  // those are restored via the Style dropdown / grid reset, not here.
+  function clearCanvas() {
+    if (filled.size === 0) return;
+    pushHistory('clear');
     filled.clear();
-    const st = STYLES[state.style] || STYLES.custom;
-    if (st.gradient) {
-      state.artboardPaint = { type: 'linear', angle: 135, stops: [
-        { color: st.gradient[0], alpha: 100, pos: 0 },
-        { color: st.gradient[1], alpha: 100, pos: 1 },
-      ]};
-      state.boxPaint = { type: 'solid', angle: 135, stops: [
-        { color: st.box.color, alpha: st.box.alpha, pos: 0 },
-        { color: st.box.color, alpha: 0, pos: 1 },
-      ]};
-    } else {
-      // Custom = factory defaults (matches the initial `state`).
-      state.artboardPaint = { type: 'solid', angle: 135, stops: [
-        { color: '#2a2a2a', alpha: 100, pos: 0 }, { color: '#000000', alpha: 100, pos: 1 } ]};
-      state.boxPaint = { type: 'solid', angle: 135, stops: [
-        { color: '#ffd400', alpha: 100, pos: 0 }, { color: '#ffffff', alpha: 100, pos: 1 } ]};
-    }
-    state.boxR = 8;
-    state.neckR = 12;
-    state.shape = 'square';
-    syncPaintToLegacy('artboard');
-    syncPaintToLegacy('box');
-    if (picker.classList.contains('open')) closePicker();
-    applyAll();
-    toast('Reset');
+    render();
+    toast('Cleared');
   }
-  $('resetBtn').addEventListener('click', resetProject);
+  $('resetBtn').addEventListener('click', clearCanvas);
 
   /* Export format / scale selectors */
   $('exportFormat').value = state.exportFormat;
