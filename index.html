@@ -127,6 +127,8 @@
   }
   .cell.first-col { border-left: var(--grid-stroke) solid var(--grid-line); }
   .cell.first-row { border-top: var(--grid-stroke) solid var(--grid-line); }
+  /* Diagonal lattice: absolutely-positioned tiles keep their exact cw×ch size */
+  body[data-gridtype="diagonal"] .cell { box-sizing: border-box; }
   .blobs {
     position: absolute;
     inset: 0;
@@ -151,6 +153,9 @@
   }
   body[data-box-grad="1"] .blobs { display: none; }
   body[data-box-grad="1"] .blobs-grad { display: block; }
+  /* Diagonal: let the gradient-box SVG draw its widened rect beyond its viewport
+     (the rotated content is clipped by .stage instead). */
+  body[data-gridtype="diagonal"] .blobs-grad { overflow: visible; }
   .brush-preview {
     position: absolute;
     pointer-events: none;
@@ -370,6 +375,9 @@
   }
   .slider-row > .lbl { color: var(--text-dim); }
   .slider-row > .val { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  /* Diagonal-grid angle slider — only shown in diagonal mode */
+  #gridAngleRow { display: none; }
+  body[data-gridtype="diagonal"] #gridAngleRow { display: grid; }
   input[type=range] {
     -webkit-appearance: none;
     background: transparent;
@@ -1264,6 +1272,20 @@
     <div class="section">
       <button class="section-head" type="button"><span class="caret">▾</span>Grid</button>
       <div class="section-body">
+        <div class="row">
+          <div class="field select-field" style="flex:1">
+            <select id="gridType">
+              <option value="classic">Classic grid</option>
+              <option value="diagonal">Diagonal grid</option>
+            </select>
+            <span class="caret">▾</span>
+          </div>
+        </div>
+        <div class="slider-row" id="gridAngleRow">
+          <span class="lbl">Angle</span>
+          <input type="range" id="gridAngle" min="0" max="90" value="45">
+          <span class="val" id="gridAngleVal">45</span>
+        </div>
         <div class="row pair">
           <div class="field" data-scrub="cols">
             <span class="ico" title="Columns"><svg viewBox="0 0 12 12" fill="currentColor"><rect x="1" y="1" width="2.5" height="10"/><rect x="4.75" y="1" width="2.5" height="10"/><rect x="8.5" y="1" width="2.5" height="10"/></svg></span>
@@ -1567,6 +1589,7 @@
     bannerW: 800, bannerH: 400, padding: 40,
     artboardColor: '#2a2a2a', artboardAlpha: 100,
     cols: 18, rows: 8, gridStroke: 0.5,
+    gridType: 'classic', gridAngle: 45,
     gridColor: '#ffffff', gridAlpha: 10,
     boxColor: '#ffd400', boxAlpha: 100,
     // Paint objects for gradient-capable targets (artboard, box).
@@ -1767,18 +1790,76 @@
   }
 
   /* --- Render --- */
+  // Diagonal lattice index range: inverse-rotate the inner-rect corners into the
+  // (un-rotated) lattice frame, take the bounding box, convert to r,c with margin.
+  // Guarantees the rotated+clipped lattice fully covers the inner area.
+  function diagLatticeRange() {
+    const cw = cellW(), ch = cellH();
+    const innerW = state.cols * cw, innerH = state.rows * ch;
+    const cx = innerW / 2, cy = innerH / 2;
+    const rad = (state.gridAngle || 0) * Math.PI / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [x, y] of [[0, 0], [innerW, 0], [0, innerH], [innerW, innerH]]) {
+      const dx = x - cx, dy = y - cy;
+      const lx = cx + dx * cos + dy * sin;   // inverse rotation (−θ)
+      const ly = cy - dx * sin + dy * cos;
+      if (lx < minX) minX = lx; if (lx > maxX) maxX = lx;
+      if (ly < minY) minY = ly; if (ly > maxY) maxY = ly;
+    }
+    return {
+      cMin: Math.floor(minX / cw) - 1, cMax: Math.ceil(maxX / cw) + 1,
+      rMin: Math.floor(minY / ch) - 1, rMax: Math.ceil(maxY / ch) + 1,
+    };
+  }
   function rebuildGrid() {
     const cw = cellW(), ch = cellH();
-    grid.style.gridTemplateColumns = `repeat(${state.cols}, ${cw}px)`;
-    grid.style.gridTemplateRows = `repeat(${state.rows}, ${ch}px)`;
     grid.innerHTML = '';
-    for (let r = 0; r < state.rows; r++) {
-      for (let c = 0; c < state.cols; c++) {
-        const cell = document.createElement('div');
-        cell.className = 'cell' + (r === 0 ? ' first-row' : '') + (c === 0 ? ' first-col' : '');
-        cell.dataset.r = r; cell.dataset.c = c;
-        grid.appendChild(cell);
+    if (state.gridType === 'diagonal') {
+      // Absolutely-positioned, oversized lattice (rotation/clip applied to the layer)
+      grid.style.display = 'block';
+      grid.style.gridTemplateColumns = '';
+      grid.style.gridTemplateRows = '';
+      const { cMin, cMax, rMin, rMax } = diagLatticeRange();
+      for (let r = rMin; r <= rMax; r++) {
+        for (let c = cMin; c <= cMax; c++) {
+          const cell = document.createElement('div');
+          cell.className = 'cell';
+          cell.dataset.r = r; cell.dataset.c = c;
+          cell.style.position = 'absolute';
+          cell.style.left = (c * cw) + 'px';
+          cell.style.top = (r * ch) + 'px';
+          cell.style.width = cw + 'px';
+          cell.style.height = ch + 'px';
+          grid.appendChild(cell);
+        }
       }
+    } else {
+      grid.style.display = 'grid';
+      grid.style.gridTemplateColumns = `repeat(${state.cols}, ${cw}px)`;
+      grid.style.gridTemplateRows = `repeat(${state.rows}, ${ch}px)`;
+      for (let r = 0; r < state.rows; r++) {
+        for (let c = 0; c < state.cols; c++) {
+          const cell = document.createElement('div');
+          cell.className = 'cell' + (r === 0 ? ' first-row' : '') + (c === 0 ? ' first-col' : '');
+          cell.dataset.r = r; cell.dataset.c = c;
+          grid.appendChild(cell);
+        }
+      }
+    }
+  }
+  // Rotate the grid + blob layers around the inner-area centre and clip to it
+  // (only in diagonal mode). transform-origin 50% 50% = inner-area centre.
+  function applyGridTransform() {
+    document.body.setAttribute('data-gridtype', state.gridType);
+    const layers = [grid, blobs, $('blobsGrad')];
+    if (state.gridType === 'diagonal') {
+      const t = `rotate(${state.gridAngle || 0}deg)`;
+      layers.forEach(el => { if (el) { el.style.transformOrigin = '50% 50%'; el.style.transform = t; } });
+      stage.style.overflow = 'hidden';
+    } else {
+      layers.forEach(el => { if (el) el.style.transform = ''; });
+      stage.style.overflow = '';
     }
   }
   function render() {
@@ -1816,6 +1897,15 @@
       const [r, c] = key.split(',').map(Number);
       cells += `<rect x="${c * cw}" y="${r * ch}" width="${cw}" height="${ch}" fill="#fff"/>`;
     }
+    // In diagonal mode the lattice (and its filled cells) extends past the inner
+    // rect; widen the gradient-filled rect to cover it (the layer is rotated +
+    // clipped by .stage, and #blobsGrad is overflow:visible in diagonal).
+    let rx = 0, ry = 0, rw = innerW, rh = innerH;
+    if (state.gridType === 'diagonal') {
+      const { cMin, cMax, rMin, rMax } = diagLatticeRange();
+      rx = cMin * cw; ry = rMin * ch;
+      rw = (cMax - cMin + 1) * cw; rh = (rMax - rMin + 1) * ch;
+    }
     const g = paintToSVG(state.boxPaint, 'boxGradLive');
     svg.innerHTML = `
       <defs>
@@ -1828,7 +1918,7 @@
         </mask>
         ${g.def}
       </defs>
-      <rect x="0" y="0" width="${innerW}" height="${innerH}" fill="${g.fill}" fill-opacity="${g.opacity}" mask="url(#boxMaskLive)"/>
+      <rect x="${rx}" y="${ry}" width="${rw}" height="${rh}" fill="${g.fill}" fill-opacity="${g.opacity}" mask="url(#boxMaskLive)"/>
     `;
   }
 
@@ -1849,6 +1939,12 @@
       if (document.activeElement !== alphaEl) alphaEl.value = prim.alpha;
     }
     $('shape').value = state.shape;
+    // Reflect grid-type into the enhanced dropdown (change is a no-op in the
+    // handler when the value already matches, so this won't loop or push history).
+    $('gridType').value = state.gridType;
+    $('gridType').dispatchEvent(new Event('change'));
+    $('gridAngle').value = state.gridAngle;
+    $('gridAngleVal').textContent = state.gridAngle;
   }
 
   function applyAll() {
@@ -1865,9 +1961,13 @@
     cellInfo.textContent = `${+cw.toFixed(1)} × ${+ch.toFixed(1)}`;
     artboardLabel.textContent = `${state.bannerW} × ${state.bannerH}`;
 
-    for (const key of [...filled]) {
-      const [r, c] = key.split(',').map(Number);
-      if (r >= state.rows || c >= state.cols) filled.delete(key);
+    // Classic grid is bounded to cols×rows; diagonal uses an extended lattice
+    // (negative / beyond-range indices), so don't prune painted cells there.
+    if (state.gridType !== 'diagonal') {
+      for (const key of [...filled]) {
+        const [r, c] = key.split(',').map(Number);
+        if (r >= state.rows || c >= state.cols) filled.delete(key);
+      }
     }
     rebuildGrid();
     if (typeof buildFitStepper === 'function') buildFitStepper();
@@ -1901,6 +2001,7 @@
 
     syncInputs();
     render();
+    applyGridTransform();
   }
 
   /* --- Undo / Redo --- */
@@ -2107,6 +2208,18 @@
     state.shape = e.target.value;
     applyAll();
   });
+  $('gridType').addEventListener('change', e => {
+    if (state.gridType === e.target.value) return;
+    pushHistory('gridType');
+    state.gridType = e.target.value;
+    applyAll();
+  });
+  $('gridAngle').addEventListener('input', e => {
+    state.gridAngle = +e.target.value;
+    $('gridAngleVal').textContent = state.gridAngle;
+    applyAll();
+  });
+  $('gridAngle').addEventListener('mousedown', () => pushHistory('gridAngle'));
 
   /* Common divisors of innerW,innerH used by Fit stepper */
   function commonDivisors(a, b) {
@@ -2757,20 +2870,27 @@
     const { bannerW, bannerH, padding, cols, rows, shape, neckR } = state;
     const cw = (bannerW - 2 * padding) / cols;
     const ch = (bannerH - 2 * padding) / rows;
+    const diagonal = state.gridType === 'diagonal';
+    const innerW = bannerW - 2 * padding, innerH = bannerH - 2 * padding;
     let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${bannerW} ${bannerH}">`;
     s += `<defs><filter id="goo" x="-10%" y="-10%" width="120%" height="120%">`;
     s += `<feGaussianBlur in="SourceGraphic" stdDeviation="${Math.max(state.boxR, 0.001)}" result="blur"/>`;
     s += `<feColorMatrix in="blur" values="${gooMatrixValues(neckR)}" result="shape"/>`;
     s += `<feFlood flood-color="#ffffff" flood-opacity="1" result="flood"/>`;
     s += `<feComposite in="flood" in2="shape" operator="in"/>`;
-    s += `</filter></defs>`;
+    s += `</filter>`;
+    if (diagonal) s += `<clipPath id="innerClip"><rect x="${padding}" y="${padding}" width="${innerW}" height="${innerH}"/></clipPath>`;
+    s += `</defs>`;
     if (filled.size > 0) {
-      s += `<g filter="url(#goo)">`;
+      let rects = '';
       for (const key of filled) {
         const [r, c] = key.split(',').map(Number);
-        s += buildShapeSvg(shape, { x: padding + c*cw, y: padding + r*ch, w: cw, h: ch }, '#ffffff');
+        rects += buildShapeSvg(shape, { x: padding + c*cw, y: padding + r*ch, w: cw, h: ch }, '#ffffff');
       }
-      s += `</g>`;
+      // Diagonal: rotate the goo group around the inner-area centre and clip it
+      // to the inner rect, so the rasterised silhouette matches the live canvas.
+      const grp = `<g filter="url(#goo)"${diagonal ? ` transform="rotate(${state.gridAngle||0} ${bannerW/2} ${bannerH/2})"` : ''}>${rects}</g>`;
+      s += diagonal ? `<g clip-path="url(#innerClip)">${grp}</g>` : grp;
     }
     s += `</svg>`;
     return s;
@@ -2942,19 +3062,33 @@
     if (abPaint.def) defs += abPaint.def;
     if (boxPaths && boxP.def) defs += boxP.def;
 
+    const diagonal = state.gridType === 'diagonal';
+    const innerW = bannerW - 2 * padding, innerH = bannerH - 2 * padding;
+    if (diagonal) defs += `<clipPath id="gridClip"><rect x="${padding}" y="${padding}" width="${innerW}" height="${innerH}"/></clipPath>`;
+
+    // Build the grid lines (classic: bounded to cols×rows; diagonal: extended
+    // lattice, later rotated + clipped to the inner rect).
+    let gridLines = '';
+    if (diagonal) {
+      const { cMin, cMax, rMin, rMax } = diagLatticeRange();
+      const x0 = padding + cMin * cw, x1 = padding + (cMax + 1) * cw;
+      const y0 = padding + rMin * ch, y1 = padding + (rMax + 1) * ch;
+      for (let c = cMin; c <= cMax + 1; c++) { const x = padding + c * cw; gridLines += `<line x1="${x}" y1="${y0}" x2="${x}" y2="${y1}"/>`; }
+      for (let r = rMin; r <= rMax + 1; r++) { const y = padding + r * ch; gridLines += `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}"/>`; }
+    } else {
+      for (let c = 0; c <= cols; c++) { const x = padding + c * cw; gridLines += `<line x1="${x}" y1="${padding}" x2="${x}" y2="${padding + rows * ch}"/>`; }
+      for (let r = 0; r <= rows; r++) { const y = padding + r * ch; gridLines += `<line x1="${padding}" y1="${y}" x2="${padding + cols * cw}" y2="${y}"/>`; }
+    }
+    const gridAttrs = `stroke="rgb(${gr},${gg},${gb})" stroke-opacity="${gridAlpha/100}" stroke-width="${gridStroke}" fill="none" shape-rendering="${gridStroke < 1 ? 'geometricPrecision' : 'crispEdges'}"`;
+
     let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${bannerW}" height="${bannerH}" viewBox="0 0 ${bannerW} ${bannerH}">`;
     if (defs) s += `<defs>${defs}</defs>`;
     s += `<rect id="background" width="${bannerW}" height="${bannerH}" fill="${abPaint.fill}" fill-opacity="${abPaint.opacity}"/>`;
-    s += `<g id="grid" stroke="rgb(${gr},${gg},${gb})" stroke-opacity="${gridAlpha/100}" stroke-width="${gridStroke}" fill="none" shape-rendering="${gridStroke < 1 ? 'geometricPrecision' : 'crispEdges'}">`;
-    for (let c = 0; c <= cols; c++) {
-      const x = padding + c * cw;
-      s += `<line x1="${x}" y1="${padding}" x2="${x}" y2="${padding + rows * ch}"/>`;
+    if (diagonal) {
+      s += `<g id="grid" clip-path="url(#gridClip)"><g transform="rotate(${state.gridAngle||0} ${bannerW/2} ${bannerH/2})" ${gridAttrs}>${gridLines}</g></g>`;
+    } else {
+      s += `<g id="grid" ${gridAttrs}>${gridLines}</g>`;
     }
-    for (let r = 0; r <= rows; r++) {
-      const y = padding + r * ch;
-      s += `<line x1="${padding}" y1="${y}" x2="${padding + cols * cw}" y2="${y}"/>`;
-    }
-    s += `</g>`;
     if (boxPaths) {
       s += `<g id="boxes" fill="${boxP.fill}" fill-opacity="${boxP.opacity}" fill-rule="evenodd">${boxPaths}</g>`;
     }
