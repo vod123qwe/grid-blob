@@ -1025,28 +1025,26 @@
     gap: 8px;
     z-index: 50;
   }
-  /* Floating Reset — bottom-left, aligned with the template strip (left) and brush (bottom) */
+  /* Floating Clear — bottom-right, right edge aligned with the zoom control */
   .reset-fab {
     position: fixed;
-    left: 16px;
+    right: calc(280px + 16px);
     bottom: 16px;
     z-index: 50;
     display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: center;
     background: var(--sidebar);
     border: none;
     border-radius: 6px;
-    padding: 7px 12px;
+    padding: 8px;
     color: var(--text-dim);
-    font: inherit;
-    font-size: 11px;
     cursor: pointer;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
     user-select: none;
   }
-  .reset-fab:hover { color: var(--text); }
-  .reset-fab svg { width: 13px; height: 13px; display: block; }
+  .reset-fab:hover { color: var(--text); background: var(--hover); }
+  .reset-fab svg { width: 16px; height: 16px; display: block; }
   .template-control,
   .style-control {
     background: var(--sidebar);
@@ -1655,9 +1653,8 @@
 </div>
 
 <!-- Floating Reset (bottom-left) -->
-<button class="reset-fab" id="resetBtn" type="button" title="Clear the painted boxes">
-  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4h7M5 4V3a1 1 0 0 1 1-1h0a1 1 0 0 1 1 1v1M3.3 4l.4 5.2a1 1 0 0 0 1 .8h2.6a1 1 0 0 0 1-.8L8.7 4"/></svg>
-  Clear
+<button class="reset-fab" id="resetBtn" type="button" title="Clear the painted boxes" aria-label="Clear">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 4.5L11 13"/><path d="M8 10l6 6"/><path d="M8 10l-3.5 3.5a1.5 1.5 0 0 0 0 2.1l3.9 3.9a1.5 1.5 0 0 0 2.1 0L14 16"/><path d="M6 18l-1.6 2.6M9 19.5l-.9 2.6M12 20l.4 2.4"/></svg>
 </button>
 
 <div class="toast" id="toast"></div>
