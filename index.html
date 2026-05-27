@@ -2270,11 +2270,18 @@
   }
   function applyPaint(cell) {
     const { r: r0, c: c0, n } = brushOrigin(cell);
+    // Perspective uses the extended (rotated) lattice that fills the artboard, so
+    // allow painting beyond cols×rows — clamp to the lattice range, not the base grid.
+    const persp = state.gridType === 'perspective';
+    const rng = persp ? diagLatticeRange() : null;
+    const inRange = (r, c) => persp
+      ? (r >= rng.rMin && r <= rng.rMax && c >= rng.cMin && c <= rng.cMax)
+      : (r >= 0 && r < state.rows && c >= 0 && c < state.cols);
     let dirty = false;
     for (let dr = 0; dr < n; dr++) {
       for (let dc = 0; dc < n; dc++) {
         const r = r0 + dr, c = c0 + dc;
-        if (r < 0 || r >= state.rows || c < 0 || c >= state.cols) continue;
+        if (!inRange(r, c)) continue;
         const key = r + ',' + c;
         if (paintMode === 'paint') {
           if (!filled.has(key)) { filled.add(key); dirty = true; }
