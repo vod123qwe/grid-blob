@@ -379,9 +379,33 @@
   /* Diagonal-grid angle controls — only shown in diagonal mode, sit under the
      column/row markers; the lock sits between the two sliders. */
   #gridAngleRow { display: none; }
-  body[data-gridtype="perspective"] #gridAngleRow { display: block; }
+  body[data-gridtype="perspective"] #gridAngleRow { display: flex; align-items: stretch; gap: 6px; }
   #gridDiagRow { display: none; }
   body[data-gridtype="diagonal"] #gridDiagRow { display: block; }
+  /* Tilt X/Y link — bracket on the left + lock in the middle (Figma-style) */
+  .tilt-link { position: relative; flex: 0 0 14px; }
+  .tilt-bracket {
+    position: absolute; left: 5px; right: 0; top: 16px; bottom: 16px;
+    border: 1.5px solid var(--text-mute); border-right: none;
+    border-radius: 5px 0 0 5px;
+    transition: border-color 120ms, opacity 120ms;
+  }
+  .tilt-lock {
+    position: absolute; left: -3px; top: 50%; transform: translateY(-50%);
+    width: 18px; height: 18px; padding: 0; z-index: 1;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--sidebar); border: none; border-radius: 4px;
+    color: var(--text-mute); cursor: pointer;
+  }
+  .tilt-lock:hover { color: var(--text); }
+  .tilt-lock svg { width: 13px; height: 13px; display: block; }
+  .tilt-lock .ic-unlocked { display: none; }
+  .tilt-rows { flex: 1; min-width: 0; }
+  #gridAngleRow.linked .tilt-bracket { border-color: var(--accent); }
+  #gridAngleRow.linked .tilt-lock { color: var(--accent); }
+  #gridAngleRow:not(.linked) .tilt-bracket { opacity: 0.4; border-style: dashed; }
+  #gridAngleRow:not(.linked) .tilt-lock .ic-locked { display: none; }
+  #gridAngleRow:not(.linked) .tilt-lock .ic-unlocked { display: block; }
   .angle-mid { display: flex; justify-content: center; margin: -2px 0; }
   .angle-link {
     background: transparent; border: none; cursor: pointer;
@@ -1025,7 +1049,7 @@
     gap: 8px;
     z-index: 50;
   }
-  /* Floating Clear — bottom-right, right edge aligned with the zoom control */
+  /* Floating Clear — blue circular CTA, bottom-right, right edge aligned with the zoom control */
   .reset-fab {
     position: fixed;
     right: calc(280px + 16px);
@@ -1034,17 +1058,17 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--sidebar);
+    width: 48px; height: 48px;
+    background: var(--accent);
     border: none;
-    border-radius: 6px;
-    padding: 8px;
-    color: var(--text-dim);
+    border-radius: 50%;
+    color: #fff;
     cursor: pointer;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.45);
     user-select: none;
   }
-  .reset-fab:hover { color: var(--text); background: var(--hover); }
-  .reset-fab svg { width: 16px; height: 16px; display: block; }
+  .reset-fab:hover { background: #2aa7ff; }
+  .reset-fab svg { width: 26px; height: 26px; display: block; }
   .template-control,
   .style-control {
     background: var(--sidebar);
@@ -1344,17 +1368,26 @@
             <input type="number" id="rows" value="4" min="1" max="64">
           </div>
         </div>
-        <!-- Perspective: independent tilt of each axis (skew). -->
-        <div id="gridAngleRow">
-          <div class="slider-row">
-            <span class="lbl">Tilt X</span>
-            <input type="range" id="rowAngle" min="0" max="90" value="45">
-            <span class="val" id="rowAngleVal">45</span>
+        <!-- Perspective: tilt each axis; lock (default on) links them = rigid rotation -->
+        <div id="gridAngleRow" class="linked">
+          <div class="tilt-link">
+            <span class="tilt-bracket"></span>
+            <button class="tilt-lock" id="angleLink" type="button" title="Lock Tilt X &amp; Tilt Y (rotate together)">
+              <svg class="ic-locked" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6" rx="1.2"/><path d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7"/></svg>
+              <svg class="ic-unlocked" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6" rx="1.2"/><path d="M5.5 7V5.5a2.5 2.5 0 0 1 4.9-.6"/></svg>
+            </button>
           </div>
-          <div class="slider-row">
-            <span class="lbl">Tilt Y</span>
-            <input type="range" id="colAngle" min="0" max="90" value="45">
-            <span class="val" id="colAngleVal">45</span>
+          <div class="tilt-rows">
+            <div class="slider-row">
+              <span class="lbl">Tilt X</span>
+              <input type="range" id="rowAngle" min="0" max="90" value="45">
+              <span class="val" id="rowAngleVal">45</span>
+            </div>
+            <div class="slider-row">
+              <span class="lbl">Tilt Y</span>
+              <input type="range" id="colAngle" min="0" max="90" value="45">
+              <span class="val" id="colAngleVal">45</span>
+            </div>
           </div>
         </div>
         <!-- Diagonal: 45° lines over the classic grid; offset shifts them, spacing sets density -->
@@ -1664,7 +1697,7 @@
     bannerW: 800, bannerH: 400, padding: 40,
     artboardColor: '#2a2a2a', artboardAlpha: 100,
     cols: 18, rows: 8, gridStroke: 0.5,
-    gridType: 'classic', colAngle: 45, rowAngle: 45,
+    gridType: 'classic', colAngle: 45, rowAngle: 45, angleLinked: true,
     diagOffset: 0, diagSpacing: 80,
     gridColor: '#ffffff', gridAlpha: 10,
     boxColor: '#ffd400', boxAlpha: 100,
@@ -1947,7 +1980,7 @@
   // (only in diagonal mode). transform-origin 50% 50% = inner-area centre.
   // Grid values the reset restores; also used to decide whether the grid is
   // "dirty" (→ show the header reset icon).
-  const GRID_DEFAULTS = { cols: 18, rows: 8, gridStroke: 0.5, boxR: 8, neckR: 12, shape: 'square', colAngle: 45, rowAngle: 45, diagOffset: 0, diagSpacing: 80 };
+  const GRID_DEFAULTS = { cols: 18, rows: 8, gridStroke: 0.5, boxR: 8, neckR: 12, shape: 'square', colAngle: 45, rowAngle: 45, angleLinked: true, diagOffset: 0, diagSpacing: 80 };
   function gridIsDirty() {
     for (const k in GRID_DEFAULTS) if (state[k] !== GRID_DEFAULTS[k]) return true;
     return false;
@@ -2154,6 +2187,7 @@
     $('gridType').dispatchEvent(new Event('change'));
     $('colAngle').value = state.colAngle; $('colAngleVal').textContent = state.colAngle;
     $('rowAngle').value = state.rowAngle; $('rowAngleVal').textContent = state.rowAngle;
+    $('gridAngleRow').classList.toggle('linked', state.angleLinked);
     $('diagOffset').value = state.diagOffset; $('diagOffsetVal').textContent = state.diagOffset;
     $('diagSpacing').value = state.diagSpacing; $('diagSpacingVal').textContent = state.diagSpacing;
   }
@@ -2500,11 +2534,17 @@
     state.gridType = e.target.value;
     applyAll();
   });
-  // Perspective: each axis tilts independently (no link).
-  $('colAngle').addEventListener('input', e => { state.colAngle = +e.target.value; applyAll(); });
-  $('rowAngle').addEventListener('input', e => { state.rowAngle = +e.target.value; applyAll(); });
+  // Perspective tilt — when locked (default) the two axes move together (rotation).
+  $('colAngle').addEventListener('input', e => { state.colAngle = +e.target.value; if (state.angleLinked) state.rowAngle = state.colAngle; applyAll(); });
+  $('rowAngle').addEventListener('input', e => { state.rowAngle = +e.target.value; if (state.angleLinked) state.colAngle = state.rowAngle; applyAll(); });
   $('colAngle').addEventListener('mousedown', () => pushHistory('tilt'));
   $('rowAngle').addEventListener('mousedown', () => pushHistory('tilt'));
+  $('angleLink').addEventListener('click', () => {
+    pushHistory('tilt-link');
+    state.angleLinked = !state.angleLinked;
+    if (state.angleLinked) state.rowAngle = state.colAngle; // re-sync on re-lock
+    applyAll();
+  });
   // Diagonal: 45° guide-line offset + spacing.
   $('diagOffset').addEventListener('input', e => { state.diagOffset = +e.target.value; applyAll(); });
   $('diagSpacing').addEventListener('input', e => { state.diagSpacing = +e.target.value; applyAll(); });
