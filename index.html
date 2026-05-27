@@ -137,6 +137,18 @@
     pointer-events: none;
   }
   .diag-lines { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+  /* Perspective Experimental (topographic) — SVG wireframe + draggable sculpt dots */
+  .topo-lines { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: visible; }
+  .topo-handles { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+  .topo-handle {
+    position: absolute; width: 13px; height: 13px;
+    border-radius: 50%; border: 2px solid #fff; background: var(--accent);
+    transform: translate(-50%, -50%); cursor: ns-resize; pointer-events: auto;
+    box-shadow: 0 1px 5px rgba(0,0,0,0.5);
+  }
+  .topo-handle.down { background: #ff5c7a; }
+  .topo-handle.flat { background: var(--text-mute); }
+  .topo-handle:hover { transform: translate(-50%, -50%) scale(1.25); }
   .blob {
     position: absolute;
     background: var(--blob-color);
@@ -382,6 +394,15 @@
   body[data-gridtype="perspective"] #gridAngleRow { display: flex; align-items: stretch; gap: 6px; }
   #gridDiagRow { display: none; }
   body[data-gridtype="diagonal"] #gridDiagRow { display: block; }
+  #gridTopoRow { display: none; }
+  body[data-gridtype="topo"] #gridTopoRow { display: block; }
+  .topo-btns { display: flex; gap: 6px; margin-top: 4px; }
+  .topo-btn {
+    flex: 1; padding: 6px 8px; font: inherit; color: var(--text-dim);
+    background: var(--workspace); border: none; border-radius: 5px;
+    box-shadow: inset 0 0 0 1px var(--divider); cursor: pointer;
+  }
+  .topo-btn:hover { color: var(--text); box-shadow: inset 0 0 0 1px var(--text-mute); }
   /* Tilt X/Y link — bracket on the left + lock in the middle (Figma-style) */
   .tilt-link { position: relative; flex: 0 0 14px; }
   .tilt-bracket {
@@ -1356,6 +1377,7 @@
               <option value="classic">Classic grid</option>
               <option value="diagonal">Diagonal grid</option>
               <option value="perspective">Perspective grid</option>
+              <option value="topo">Perspective Experimental</option>
             </select>
             <span class="caret">▾</span>
           </div>
@@ -1404,6 +1426,30 @@
             <input type="range" id="diagSpacing" min="20" max="240" value="80">
             <span class="val" id="diagSpacingVal">80</span>
           </div>
+        </div>
+        <!-- Perspective Experimental: topographic displaced mesh. Drag the dots on the
+             canvas to raise/lower the terrain; sliders set overall height, view tilt, spread. -->
+        <div id="gridTopoRow">
+          <div class="slider-row">
+            <span class="lbl">Height</span>
+            <input type="range" id="topoAmp" min="0" max="100" value="50">
+            <span class="val" id="topoAmpVal">50</span>
+          </div>
+          <div class="slider-row">
+            <span class="lbl">Tilt</span>
+            <input type="range" id="topoTilt" min="0" max="80" value="55">
+            <span class="val" id="topoTiltVal">55</span>
+          </div>
+          <div class="slider-row">
+            <span class="lbl">Spread</span>
+            <input type="range" id="topoScale" min="40" max="220" value="100">
+            <span class="val" id="topoScaleVal">100</span>
+          </div>
+          <div class="topo-btns">
+            <button class="topo-btn" id="topoRandom" type="button">Randomize</button>
+            <button class="topo-btn" id="topoFlatten" type="button">Flatten</button>
+          </div>
+          <div class="info">Drag the dots on the canvas to sculpt elevation</div>
         </div>
         <div class="row">
           <div class="field" data-scrub="gridStroke" data-step="0.1" style="flex:1">
@@ -1702,6 +1748,14 @@
     cols: 18, rows: 8, gridStroke: 0.5,
     gridType: 'classic', colAngle: 45, rowAngle: 45, angleLinked: true,
     diagOffset: 0, diagSpacing: 80,
+    // Perspective Experimental (topographic): displacement amplitude, view tilt,
+    // bump spread, + control points {x,y in 0..1, h elevation -1..1}.
+    topoAmp: 50, topoTilt: 55, topoScale: 100,
+    topoPoints: [
+      { x: 0.22, y: 0.32, h: 0.95 }, { x: 0.78, y: 0.30, h: 0.55 },
+      { x: 0.50, y: 0.62, h: -0.85 }, { x: 0.15, y: 0.80, h: 0.45 },
+      { x: 0.85, y: 0.78, h: -0.45 }
+    ],
     gridColor: '#ffffff', gridAlpha: 10,
     boxColor: '#ffd400', boxAlpha: 100,
     // Paint objects for gradient-capable targets (artboard, box).
@@ -1919,6 +1973,86 @@
     const { a, b, c, d } = gridMatrix();
     return `translate(${cx} ${cy}) matrix(${a} ${b} ${c} ${d} 0 0) translate(${-cx} ${-cy})`;
   }
+  /* ===== Perspective Experimental (topographic mesh) =====
+     A flat (cols×rows) lattice is displaced by a smooth height field (sum of
+     gaussian bumps at user control points), tilted into a 3D view and
+     perspective-projected, then the whole projected shape is fit into the inner
+     rect. Rendered as an SVG wireframe; control points are draggable to sculpt. */
+  function topoHeight(u, v) {                       // u,v in 0..1 → elevation ~[-1..1]
+    const pts = state.topoPoints || [];
+    const sigma = 0.16 * (state.topoScale / 100);   // bump radius
+    const s2 = 2 * sigma * sigma || 1e-6;
+    let h = 0;
+    for (const p of pts) {
+      const dx = u - p.x, dy = v - p.y;
+      h += p.h * Math.exp(-(dx * dx + dy * dy) / s2);
+    }
+    return h;
+  }
+  // Raw 3D→2D projection (centred, before the fit-to-inner step).
+  function topoProjectRaw(u, v) {
+    const innerW = state.bannerW - 2 * state.padding;
+    const innerH = state.bannerH - 2 * state.padding;
+    const x3 = (u - 0.5) * innerW;          // left/right
+    const z3 = (v - 0.5) * innerH;          // depth (front/back)
+    const ampPx = (state.topoAmp / 100) * innerH * 0.7;
+    const y3 = -topoHeight(u, v) * ampPx;   // up (screen-y is down → negate)
+    const t = (state.topoTilt || 0) * Math.PI / 180;
+    const ry = y3 * Math.cos(t) - z3 * Math.sin(t);
+    const rz = y3 * Math.sin(t) + z3 * Math.cos(t);
+    const focal = innerH * 1.5;
+    const cam = focal + innerH * 1.1;       // camera distance from origin
+    const s = focal / (cam + rz);           // perspective foreshortening
+    return [x3 * s, ry * s];
+  }
+  // Project all (cols+1)×(rows+1) vertices, fit their bbox into the inner rect.
+  // Caches the fit transform so control points project consistently.
+  let topoCache = null;
+  function computeTopo() {
+    const cols = state.cols, rows = state.rows;
+    const innerW = state.bannerW - 2 * state.padding;
+    const innerH = state.bannerH - 2 * state.padding;
+    const raw = [];
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let j = 0; j <= rows; j++) {
+      const row = [];
+      for (let i = 0; i <= cols; i++) {
+        const p = topoProjectRaw(i / cols, j / rows);
+        row.push(p);
+        if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
+        if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
+      }
+      raw.push(row);
+    }
+    const bw = (maxX - minX) || 1, bh = (maxY - minY) || 1;
+    // Non-uniform fit: stretch X and Y independently so the mesh always spans the
+    // inner rect edge-to-edge (matches the reference's full-frame topographic look).
+    const margin = 0.99;
+    const scX = (innerW / bw) * margin, scY = (innerH / bh) * margin;
+    const ox = (innerW - bw * scX) / 2 - minX * scX;
+    const oy = (innerH - bh * scY) / 2 - minY * scY;
+    const verts = raw.map(row => row.map(p => [p[0] * scX + ox, p[1] * scY + oy]));
+    topoCache = { scX, scY, ox, oy, verts };
+    return topoCache;
+  }
+  function topoProjectFitted(u, v) {
+    const c = topoCache || computeTopo();
+    const p = topoProjectRaw(u, v);
+    return [p[0] * c.scX + c.ox, p[1] * c.scY + c.oy];
+  }
+  // Open Catmull-Rom → cubic-bezier path through the given points.
+  function openCatmullPath(pts) {
+    if (pts.length < 2) return '';
+    const f = n => n.toFixed(2);
+    let d = `M ${f(pts[0][0])} ${f(pts[0][1])}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d += ` C ${f(c1x)} ${f(c1y)}, ${f(c2x)} ${f(c2y)}, ${f(p2[0])} ${f(p2[1])}`;
+    }
+    return d;
+  }
   function diagLatticeRange() {
     const cw = cellW(), ch = cellH();
     const innerW = state.cols * cw, innerH = state.rows * ch;
@@ -1946,6 +2080,13 @@
   function rebuildGrid() {
     const cw = cellW(), ch = cellH();
     grid.innerHTML = '';
+    if (state.gridType === 'topo') {
+      // No paint cells in topo mode — the SVG wireframe carries the grid.
+      grid.style.display = 'block';
+      grid.style.gridTemplateColumns = '';
+      grid.style.gridTemplateRows = '';
+      return;
+    }
     if (state.gridType === 'perspective') {
       // Absolutely-positioned, oversized lattice (rotation/clip applied to the layer)
       grid.style.display = 'block';
@@ -1983,7 +2124,7 @@
   // (only in diagonal mode). transform-origin 50% 50% = inner-area centre.
   // Grid values the reset restores; also used to decide whether the grid is
   // "dirty" (→ show the header reset icon).
-  const GRID_DEFAULTS = { cols: 18, rows: 8, gridStroke: 0.5, boxR: 8, neckR: 12, shape: 'square', colAngle: 45, rowAngle: 45, angleLinked: true, diagOffset: 0, diagSpacing: 80 };
+  const GRID_DEFAULTS = { cols: 18, rows: 8, gridStroke: 0.5, boxR: 8, neckR: 12, shape: 'square', colAngle: 45, rowAngle: 45, angleLinked: true, diagOffset: 0, diagSpacing: 80, topoAmp: 50, topoTilt: 55, topoScale: 100 };
   function gridIsDirty() {
     for (const k in GRID_DEFAULTS) if (state[k] !== GRID_DEFAULTS[k]) return true;
     return false;
@@ -1998,11 +2139,12 @@
       stage.style.overflow = 'hidden';
     } else {
       layers.forEach(el => { if (el) el.style.transform = ''; });
-      stage.style.overflow = '';
+      stage.style.overflow = state.gridType === 'topo' ? 'hidden' : '';
     }
     const gs = $('gridSection');
     if (gs) gs.classList.toggle('dirty', gridIsDirty());
     renderDiagLines();
+    renderTopo();
   }
   /* ---- New "diagonal" mode: 45° guide lines (x+y = const) over the classic grid ----
      offset shifts the family, spacing sets density. Used live + in export. */
@@ -2092,6 +2234,69 @@
     const stroke = rgba(state.gridColor, state.gridAlpha);
     svg.innerHTML = `<g stroke="${stroke}" stroke-width="${state.gridStroke}" fill="none">` +
       diagLineSegments().map(([x1, y1, x2, y2]) => `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`).join('') + `</g>`;
+  }
+  // Topographic wireframe + draggable sculpt handles (live).
+  let topoHandlesBound = false;
+  function renderTopo() {
+    let svg = $('topoLines'), hl = $('topoHandles');
+    if (state.gridType !== 'topo') {
+      if (svg) svg.innerHTML = '';
+      if (hl) hl.innerHTML = '';
+      return;
+    }
+    const innerW = state.bannerW - 2 * state.padding, innerH = state.bannerH - 2 * state.padding;
+    if (!svg) {
+      svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.id = 'topoLines'; svg.setAttribute('class', 'topo-lines');
+      stage.appendChild(svg);
+    }
+    if (!hl) {
+      hl = document.createElement('div');
+      hl.id = 'topoHandles'; hl.className = 'topo-handles';
+      stage.appendChild(hl);
+    }
+    const { verts } = computeTopo();
+    const rows = verts.length, cols = verts[0].length;
+    let paths = '';
+    for (let j = 0; j < rows; j++) paths += `<path d="${openCatmullPath(verts[j])}"/>`;
+    for (let i = 0; i < cols; i++) paths += `<path d="${openCatmullPath(verts.map(r => r[i]))}"/>`;
+    const stroke = rgba(state.gridColor, state.gridAlpha);
+    svg.setAttribute('viewBox', `0 0 ${innerW} ${innerH}`);
+    svg.setAttribute('width', innerW); svg.setAttribute('height', innerH);
+    svg.innerHTML = `<g stroke="${stroke}" stroke-width="${state.gridStroke}" fill="none" stroke-linecap="round" stroke-linejoin="round">${paths}</g>`;
+    // Sculpt handles
+    hl.innerHTML = '';
+    (state.topoPoints || []).forEach((p, idx) => {
+      const [hx, hy] = topoProjectFitted(p.x, p.y);
+      const d = document.createElement('div');
+      d.className = 'topo-handle' + (p.h > 0.05 ? '' : p.h < -0.05 ? ' down' : ' flat');
+      d.style.left = hx + 'px'; d.style.top = hy + 'px';
+      d.dataset.idx = idx;
+      d.title = 'Drag up/down to sculpt';
+      hl.appendChild(d);
+    });
+    if (!topoHandlesBound) { bindTopoHandles(hl); topoHandlesBound = true; }
+  }
+  function bindTopoHandles(hl) {
+    hl.addEventListener('mousedown', e => {
+      const h = e.target.closest('.topo-handle');
+      if (!h) return;
+      e.preventDefault(); e.stopPropagation();
+      const idx = +h.dataset.idx;
+      const pt = state.topoPoints[idx];
+      if (!pt) return;
+      pushHistory('topo-sculpt');
+      const startY = e.clientY, startH = pt.h, z = state.zoom || 1;
+      const innerH = state.bannerH - 2 * state.padding;
+      const move = ev => {
+        const dy = (ev.clientY - startY) / z;
+        pt.h = Math.max(-1.5, Math.min(1.5, startH - dy / (innerH * 0.45)));
+        renderTopo();
+      };
+      const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
   }
   function render() {
     const cw = cellW(), ch = cellH();
@@ -2193,6 +2398,9 @@
     $('gridAngleRow').classList.toggle('linked', state.angleLinked);
     $('diagOffset').value = state.diagOffset; $('diagOffsetVal').textContent = state.diagOffset;
     $('diagSpacing').value = state.diagSpacing; $('diagSpacingVal').textContent = state.diagSpacing;
+    $('topoAmp').value = state.topoAmp; $('topoAmpVal').textContent = state.topoAmp;
+    $('topoTilt').value = state.topoTilt; $('topoTiltVal').textContent = state.topoTilt;
+    $('topoScale').value = state.topoScale; $('topoScaleVal').textContent = state.topoScale;
   }
 
   function applyAll() {
@@ -2414,6 +2622,7 @@
   });
   grid.addEventListener('mousedown', e => {
     if (e.button !== 0 && e.button !== 2) return;
+    if (state.gridType === 'topo') return; // sculpt handles handle their own drag
     if (state.gridType === 'diagonal') {
       const [px, py] = innerCoords(e);
       const c = Math.floor(px / cellW()), r = Math.floor(py / cellH());
@@ -2531,9 +2740,9 @@
   $('gridType').addEventListener('change', e => {
     if (state.gridType === e.target.value) return;
     pushHistory('gridType');
-    // Diagonal uses piece keys "r,c,b"; classic/perspective use "r,c". Clear the
-    // painting when crossing into/out of diagonal so key formats don't mix.
-    if (state.gridType === 'diagonal' || e.target.value === 'diagonal') filled.clear();
+    // Diagonal uses piece keys "r,c,b"; classic/perspective use "r,c"; topo has no
+    // painting. Clear when crossing into/out of diagonal or topo to avoid mixing.
+    if (['diagonal', 'topo'].includes(state.gridType) || ['diagonal', 'topo'].includes(e.target.value)) filled.clear();
     state.gridType = e.target.value;
     applyAll();
   });
@@ -2553,6 +2762,30 @@
   $('diagSpacing').addEventListener('input', e => { state.diagSpacing = +e.target.value; applyAll(); });
   $('diagOffset').addEventListener('mousedown', () => pushHistory('diag'));
   $('diagSpacing').addEventListener('mousedown', () => pushHistory('diag'));
+  // Perspective Experimental: terrain sliders + sculpt shortcuts.
+  $('topoAmp').addEventListener('input', e => { state.topoAmp = +e.target.value; applyAll(); });
+  $('topoTilt').addEventListener('input', e => { state.topoTilt = +e.target.value; applyAll(); });
+  $('topoScale').addEventListener('input', e => { state.topoScale = +e.target.value; applyAll(); });
+  $('topoAmp').addEventListener('mousedown', () => pushHistory('topo'));
+  $('topoTilt').addEventListener('mousedown', () => pushHistory('topo'));
+  $('topoScale').addEventListener('mousedown', () => pushHistory('topo'));
+  $('topoRandom').addEventListener('click', () => {
+    pushHistory('topo-random');
+    const n = 4 + Math.floor(Math.random() * 3);   // 4–6 bumps
+    state.topoPoints = Array.from({ length: n }, () => ({
+      x: 0.12 + Math.random() * 0.76,
+      y: 0.12 + Math.random() * 0.76,
+      h: (Math.random() * 2 - 1) * (0.5 + Math.random() * 0.5)
+    }));
+    applyAll();
+    toast('Randomized terrain');
+  });
+  $('topoFlatten').addEventListener('click', () => {
+    pushHistory('topo-flatten');
+    (state.topoPoints || []).forEach(p => p.h = 0);
+    applyAll();
+    toast('Flattened');
+  });
   $('gridResetBtn').addEventListener('click', () => {
     pushHistory('grid-reset');
     // Reset grid & box values to defaults — but stay on the current grid type.
@@ -3450,13 +3683,19 @@
 
     const perspective = state.gridType === 'perspective';
     const diagonal = state.gridType === 'diagonal';
+    const topo = state.gridType === 'topo';
     const innerW = bannerW - 2 * padding, innerH = bannerH - 2 * padding;
     if (perspective) defs += `<clipPath id="gridClip"><rect x="${padding}" y="${padding}" width="${innerW}" height="${innerH}"/></clipPath>`;
 
     // Build the grid lines (classic: bounded to cols×rows; perspective: extended
-    // lattice, later rotated + clipped to the inner rect).
+    // lattice, later rotated + clipped to the inner rect; topo: smooth wireframe).
     let gridLines = '';
-    if (perspective) {
+    if (topo) {
+      const { verts } = computeTopo();
+      const off = row => row.map(p => [p[0] + padding, p[1] + padding]);
+      for (let j = 0; j < verts.length; j++) gridLines += `<path d="${openCatmullPath(off(verts[j]))}"/>`;
+      for (let i = 0; i < verts[0].length; i++) gridLines += `<path d="${openCatmullPath(off(verts.map(r => r[i])))}"/>`;
+    } else if (perspective) {
       const { cMin, cMax, rMin, rMax } = diagLatticeRange();
       const x0 = padding + cMin * cw, x1 = padding + (cMax + 1) * cw;
       const y0 = padding + rMin * ch, y1 = padding + (rMax + 1) * ch;
