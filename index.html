@@ -3072,10 +3072,47 @@
     return loops;
   }
 
-  function subsampleLoop(loop, factor) {
-    if (factor <= 1 || loop.length <= 8) return loop;
+  // Light moving-average smoothing of a closed polyline — removes the marching-
+  // squares stair-stepping before we fit curves through it.
+  function smoothClosed(loop, iters) {
+    let pts = loop;
+    for (let k = 0; k < iters; k++) {
+      const N = pts.length;
+      const out = new Array(N);
+      for (let i = 0; i < N; i++) {
+        const p = pts[(i - 1 + N) % N], c = pts[i], n = pts[(i + 1) % N];
+        out[i] = [0.25 * p[0] + 0.5 * c[0] + 0.25 * n[0], 0.25 * p[1] + 0.5 * c[1] + 0.25 * n[1]];
+      }
+      pts = out;
+    }
+    return pts;
+  }
+  // Resample a closed polyline to evenly-spaced points (by arc length). Marching
+  // squares emits points unevenly (denser on axis-aligned edges); even spacing is
+  // what keeps the Catmull-Rom fit smooth instead of kinking on low-curvature runs.
+  function resampleClosed(loop, spacing) {
+    const N = loop.length;
+    if (N < 4) return loop;
+    const seg = new Array(N);
+    let perim = 0;
+    for (let i = 0; i < N; i++) {
+      const a = loop[i], b = loop[(i + 1) % N];
+      seg[i] = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      perim += seg[i];
+    }
+    if (perim === 0) return loop;
+    const count = Math.max(8, Math.round(perim / spacing));
+    const step = perim / count;
     const out = [];
-    for (let i = 0; i < loop.length; i += factor) out.push(loop[i]);
+    let segIdx = 0, segStart = 0;
+    for (let i = 0; i < count; i++) {
+      const target = i * step;
+      while (segIdx < N && segStart + seg[segIdx] < target) { segStart += seg[segIdx]; segIdx++; }
+      if (segIdx >= N) break;
+      const a = loop[segIdx], b = loop[(segIdx + 1) % N];
+      const f = seg[segIdx] > 0 ? (target - segStart) / seg[segIdx] : 0;
+      out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+    }
     return out.length >= 4 ? out : loop;
   }
 
@@ -3114,8 +3151,8 @@
     // Adaptive based on artboard area; capped to keep canvas reads under control.
     const area = bannerW * bannerH;
     const ss = area > 2_000_000 ? 1
-             : area > 600_000   ? 2
-             : area > 150_000   ? 3
+             : area > 1_000_000 ? 2
+             : area > 500_000   ? 3
              :                    4;
 
     let boxPaths = '';
@@ -3123,11 +3160,11 @@
       const { W, H, data } = await rasterizeAlpha(ss);
       const loops = extractContours(data, W, H);
       if (loops.length > 0) {
-        const subFactor = Math.max(2, Math.round(ss * 3));
         boxPaths = loops.map(loop => {
-          const scaled = loop.map(p => [p[0] / ss, p[1] / ss]);
-          const sampled = subsampleLoop(scaled, subFactor);
-          return `<path d="${loopToCatmullRomPath(sampled)}"/>`;
+          const scaled = loop.map(p => [p[0] / ss, p[1] / ss]);  // raster → artboard px
+          const smooth = smoothClosed(scaled, 2);                // remove stair-stepping
+          const even = resampleClosed(smooth, 2.5);              // evenly-spaced control points (~2.5px)
+          return `<path d="${loopToCatmullRomPath(even)}"/>`;
         }).join('');
       }
     }
